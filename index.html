@@ -129,6 +129,9 @@
         <label>
           <input type="checkbox" id="toggleWidth" /> Disable Width Rendering
         </label><br />
+        <label>
+          <input type="checkbox" id="toggleTransparency" /> Disable Transparency Rendering
+        </label><br />
       </div>
     </div>
     <canvas id="canvas"></canvas>
@@ -153,7 +156,8 @@
         renderHatch: true,
         renderColor: true,
         renderThickness: true,
-        renderWidth: true
+        renderWidth: true,
+        renderTransparency: true  // New: enable transparency rendering by default.
       };
 
       // ─────────────────────────────────────────────────────────────
@@ -453,6 +457,15 @@
           ctx.fillStyle = color;
           let dash = this.getLineDash(viewport, dxfDoc);
           if (dash && dash.length > 0) ctx.setLineDash(dash);
+          // New: if the entity has a transparency (group code "440") and transparency rendering is enabled,
+          // set the global alpha accordingly (assuming 0 = opaque, 255 = fully transparent).
+          if (renderSettings.renderTransparency && this.raw["440"] !== undefined) {
+            let transpValue = parseInt(this.raw["440"], 10);
+            let alpha = 1 - (transpValue / 255);
+            ctx.globalAlpha = alpha;
+          } else {
+            ctx.globalAlpha = 1;
+          }
         }
         // Each subclass must implement draw(ctx, viewport, dxfDoc)
       }
@@ -2025,6 +2038,11 @@
       });
       document.getElementById("toggleWidth").addEventListener("change", function (e) {
         renderSettings.renderWidth = !e.target.checked;
+        viewer.draw();
+      });
+      // New: Listen for changes to the transparency rendering option.
+      document.getElementById("toggleTransparency").addEventListener("change", function (e) {
+        renderSettings.renderTransparency = !e.target.checked;
         viewer.draw();
       });
 
