@@ -464,6 +464,9 @@
             }
           }
           if (!linetypeName) return [];
+          // Normalize linetype name for lookup
+          linetypeName = linetypeName.toUpperCase();
+
           let patternScale = 1.0;
           if (entity.raw["48"]) {
             patternScale = parseFloat(entity.raw["48"]) || 1.0;
@@ -471,8 +474,16 @@
           if (dxfDoc.linetypes && dxfDoc.linetypes[linetypeName]) {
             let ltype = dxfDoc.linetypes[linetypeName];
             if (ltype.pattern && ltype.pattern.length > 0) {
-              // multiply each dash by viewScale * entity scale
-              return ltype.pattern.map(d => d * viewport.viewScale * patternScale);
+              // For each element in the pattern:
+              // • use the absolute value (so negatives become positive gaps)
+              // • if the value is 0 (a DXF “dot”), substitute a small positive length
+              // • convert from world units to screen units by multiplying by viewport.viewScale
+              const dashArray = ltype.pattern.map(d => {
+                const absValue = Math.abs(d);
+                const dashLength = (absValue === 0 ? 0.5 : absValue);
+                return dashLength * viewport.viewScale * patternScale;
+              });
+              return dashArray;
             }
           }
           return [];
