@@ -634,7 +634,9 @@
     function draw() {
       ctx.save();
       ctx.setTransform(1,0,0,1,0,0);
-      ctx.clearRect(0,0,canvas.width, canvas.height);
+      // Fill background with black (AutoCAD-style)
+      ctx.fillStyle = "#000000";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.restore();
 
       // Set world transform (flip Y to preserve DXF's Y-up)
@@ -677,10 +679,12 @@
     /* =========================================================================
        Color, Line Weight & Linetype Helpers
     ========================================================================= */
+    // Modified: return white (ACI 7) as default if an invalid color is found.
     function getACIColor(aci) {
       if (ACI_COLORS.hasOwnProperty(aci)) return ACI_COLORS[aci];
-      return "#000000";
+      return ACI_COLORS[7] || "#FFFFFF";
     }
+    // Modified: If no valid color is set, try layer color or default to white.
     function getEntityColor(entity) {
       if (entity["420"]) {
         let tc = parseInt(entity["420"]);
@@ -688,10 +692,10 @@
         return "#" + hex;
       }
       let colorIndex = parseInt(entity["62"]);
-      if (!colorIndex || colorIndex === 256) {
+      if (isNaN(colorIndex) || colorIndex === 0 || colorIndex === 256) {
         if (entity["8"] && dxf.layers && dxf.layers[entity["8"]] && dxf.layers[entity["8"]]["62"])
           colorIndex = parseInt(dxf.layers[entity["8"]]["62"]);
-        else return "#000000";
+        else return ACI_COLORS[7] || "#FFFFFF";
       }
       return getACIColor(colorIndex);
     }
