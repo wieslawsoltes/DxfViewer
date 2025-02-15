@@ -1060,7 +1060,8 @@ function measureSegment(segment, defaultSize, viewport) {
           this.applyStyle(ctx, viewport, dxfDoc);
           let fillColor = this.getColor(dxfDoc);
           ctx.save();
-          if (this.isSolid || (this.patternName && this.patternName.includes("SOLID"))) {
+
+          if (this.isSolid || (this.patternName && this.patternName.toUpperCase().includes("SOLID"))) {
             // Solid fill hatch: fill and stroke the hatch boundaries.
             ctx.fillStyle = fillColor;
             this.drawLoopsPath(ctx);
@@ -1069,7 +1070,7 @@ function measureSegment(segment, defaultSize, viewport) {
             ctx.lineWidth = 1 / viewport.viewScale;
             ctx.stroke();
           } else {
-            // Pattern hatch: first clip to the hatch boundary.
+            // Pattern hatch: clip to the hatch boundary first.
             this.drawLoopsPath(ctx);
             ctx.clip();
 
@@ -1077,40 +1078,41 @@ function measureSegment(segment, defaultSize, viewport) {
             let patternAngleRad = DXFUtils.degToRad(this.patternAngle);
             let spacing = (this.patternScale || 1) * 10;
 
-            // Use the lower–left corner of the bounding box as the pattern origin.
-            let origin = { x: bbox.minX, y: bbox.minY };
+            // Use a pattern offset if provided, otherwise use the lower left corner of the bounding box.
+            let origin = (this.patternOffset && (this.patternOffset.x || this.patternOffset.y))
+              ? { x: this.patternOffset.x, y: this.patternOffset.y }
+              : { x: bbox.minX, y: bbox.minY };
 
-            // Compute the rotated bounding box in pattern space (relative to the origin).
-            let corners = [
-              { x: bbox.minX, y: bbox.minY },
-              { x: bbox.maxX, y: bbox.minY },
-              { x: bbox.maxX, y: bbox.maxY },
-              { x: bbox.minX, y: bbox.maxY }
-            ].map(pt => {
-              // Translate to origin then rotate
-              return DXFUtils.rotatePoint(pt.x - origin.x, pt.y - origin.y, -patternAngleRad);
-            });
-            let rMinX = Math.min(...corners.map(p => p.x));
-            let rMaxX = Math.max(...corners.map(p => p.x));
-            let rMinY = Math.min(...corners.map(p => p.y));
-            let rMaxY = Math.max(...corners.map(p => p.y));
+            // Instead of drawing pattern lines in world space using complex point rotations,
+            // set up a transformation that maps pattern coordinates to world coordinates.
+            ctx.save();
+            ctx.translate(origin.x, origin.y);
+            ctx.rotate(patternAngleRad);
 
-            // Snap the starting Y value to a multiple of spacing.
-            let startY = Math.floor(rMinY / spacing) * spacing;
+            // Determine the bounds in pattern space by transforming the hatch boundary's bbox.
+            let pts = [
+              { x: bbox.minX - origin.x, y: bbox.minY - origin.y },
+              { x: bbox.maxX - origin.x, y: bbox.minY - origin.y },
+              { x: bbox.maxX - origin.x, y: bbox.maxY - origin.y },
+              { x: bbox.minX - origin.x, y: bbox.maxY - origin.y }
+            ];
+            let tMinX = Math.min(...pts.map(p => p.x));
+            let tMaxX = Math.max(...pts.map(p => p.x));
+            let tMinY = Math.min(...pts.map(p => p.y));
+            let tMaxY = Math.max(...pts.map(p => p.y));
+
+            // Snap the starting y position to a multiple of spacing.
+            let startY = Math.floor(tMinY / spacing) * spacing;
 
             ctx.beginPath();
-            // Draw horizontal lines in pattern space, then rotate back and translate by origin.
-            for (let rY = startY; rY <= rMaxY + spacing; rY += spacing) {
-              let startPt = DXFUtils.rotatePoint(rMinX, rY, patternAngleRad);
-              let endPt   = DXFUtils.rotatePoint(rMaxX, rY, patternAngleRad);
-              startPt.x += origin.x; startPt.y += origin.y;
-              endPt.x   += origin.x; endPt.y   += origin.y;
-              ctx.moveTo(startPt.x, startPt.y);
-              ctx.lineTo(endPt.x, endPt.y);
+            for (let y = startY; y <= tMaxY; y += spacing) {
+              ctx.moveTo(tMinX, y);
+              ctx.lineTo(tMaxX, y);
             }
             ctx.strokeStyle = fillColor;
             ctx.lineWidth = 1 / viewport.viewScale;
             ctx.stroke();
+            ctx.restore();
           }
           ctx.restore();
           ctx.globalAlpha = 1;
