@@ -1,73 +1,917 @@
-CodePen Home
-Dxf Viewer v4
-Wiesław Šoltés
-Love
-Save
-
-Settings
-
-
-
-User Menu
-HTML
-0 unsaved changes 
-
-HTML Options
-1
 <!DOCTYPE html>
-2
 <html lang="en">
-3
 <head>
-4
   <meta charset="UTF-8" />
-5
   <title>Advanced Web DXF Viewer with Comprehensive MTEXT Support</title>
-6
   <style>
-7
     /* Basic full–screen canvas and toolbar styling */
-8
     body {
-9
       margin: 0;
-10
       overflow: hidden;
-11
       font-family: sans-serif;
-12
       user-select: none;
-13
       -webkit-user-select: none;
-14
       -ms-user-select: none;
-15
     }
-16
     #toolbar {
-17
       position: absolute;
-18
       top: 10px;
-!
-CSS
+      left: 10px;
+      z-index: 10;
+      background: rgba(255, 255, 255, 0.95);
+      padding: 10px;
+      border-radius: 4px;
+      box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);
+    }
+    #toolbar button,
+    #toolbar input {
+      margin: 4px 0;
+    }
+    canvas {
+      display: block;
+      touch-action: none; /* disable default touch gestures */
+    }
+  </style>
+</head>
+<body>
+  <div id="toolbar">
+    <div>
+      <input type="file" id="dxfFile" accept=".dxf" />
+    </div>
+    <div>
+      <button id="resetView">Reset View</button>
+      <button id="toggleGrid">Toggle Grid</button>
+    </div>
+    <div style="margin-top:8px;">
+      <small>Mouse or touch: drag to pan, wheel or pinch to zoom.</small>
+    </div>
+  </div>
+  <canvas id="canvas"></canvas>
+  <script>
+    /* =========================================================================
+       Global Variables & View State
+       ========================================================================= */
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    let dxf = { entities: [], blocks: {} };
+    let baseScale = 1, baseOffsetX = 0, baseOffsetY = 0;
+    let viewScale = 1, viewOffsetX = 0, viewOffsetY = 0;
+    let gridEnabled = true;
+    let isPanning = false;
+    let lastPanPoint = { x: 0, y: 0 };
 
-CSS Options
-1
-​
-JS
+    // Touch state
+    let ongoingTouches = [];
+    let lastTouchDistance = null;
+    let lastTouchCenter = null;
 
-JS Options
-1
-​
+    /* =========================================================================
+       Canvas Resize & Initial Setup
+       ========================================================================= */
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      if (dxf.entities.length > 0) {
+        setInitialView();
+      }
+      draw();
+    }
+    window.addEventListener("resize", resizeCanvas);
+    resizeCanvas();
 
-Last saved yesterday
+    /* =========================================================================
+       File Loading & DXF Parsing (supports ENTITIES, BLOCKS, and common entities)
+       ========================================================================= */
+    document.getElementById("dxfFile").addEventListener("change", function (e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function (event) {
+        const text = event.target.result;
+        dxf = parseDXF(text);
+        if (dxf.entities.length === 0 && Object.keys(dxf.blocks).length === 0) {
+          alert("No supported entities found in DXF.");
+          return;
+        }
+        setInitialView();
+        draw();
+      };
+      reader.readAsText(file);
+    });
 
-Delete
-Add to Collection
-Fork
-Embed
-Export
-Share
-ConsoleAssetsComments
-⌘
+    /* =========================================================================
+       Toolbar Button Handlers
+       ========================================================================= */
+    document.getElementById("resetView").addEventListener("click", function () {
+      viewScale = baseScale;
+      viewOffsetX = baseOffsetX;
+      viewOffsetY = baseOffsetY;
+      draw();
+    });
+    document.getElementById("toggleGrid").addEventListener("click", function () {
+      gridEnabled = !gridEnabled;
+      draw();
+    });
+
+    /* =========================================================================
+       Mouse Pan & Zoom
+       ========================================================================= */
+    canvas.addEventListener("mousedown", (e) => {
+      isPanning = true;
+      lastPanPoint = { x: e.clientX, y: e.clientY };
+    });
+    canvas.addEventListener("mousemove", (e) => {
+      if (isPanning) {
+        const dx = e.clientX - lastPanPoint.x;
+        const dy = e.clientY - lastPanPoint.y;
+        lastPanPoint = { x: e.clientX, y: e.clientY };
+        viewOffsetX += dx;
+        viewOffsetY += dy;
+        draw();
+      }
+    });
+    canvas.addEventListener("mouseup", () => (isPanning = false));
+    canvas.addEventListener("mouseleave", () => (isPanning = false));
+    canvas.addEventListener("wheel", function (e) {
+      e.preventDefault();
+      const zoomIntensity = 0.001;
+      const delta = e.deltaY;
+      const factor = 1 - delta * zoomIntensity;
+      const mouseX = e.clientX;
+      const mouseY = e.clientY;
+      viewOffsetX = mouseX - factor * (mouseX - viewOffsetX);
+      viewOffsetY = mouseY - factor * (mouseY - viewOffsetY);
+      viewScale *= factor;
+      draw();
+    });
+
+    /* =========================================================================
+       Touch Pan & Pinch Zoom
+       ========================================================================= */
+    canvas.addEventListener("touchstart", handleTouchStart, { passive: false });
+    canvas.addEventListener("touchmove", handleTouchMove, { passive: false });
+    canvas.addEventListener("touchend", handleTouchEnd, { passive: false });
+    canvas.addEventListener("touchcancel", handleTouchEnd, { passive: false });
+
+    function getTouchPos(touchEvent) {
+      const rect = canvas.getBoundingClientRect();
+      return Array.from(touchEvent.touches).map(touch => ({
+        x: touch.clientX - rect.left,
+        y: touch.clientY - rect.top
+      }));
+    }
+
+    function handleTouchStart(evt) {
+      evt.preventDefault();
+      const touches = getTouchPos(evt);
+      ongoingTouches = touches;
+      if (touches.length === 2) {
+        lastTouchDistance = getDistance(touches[0], touches[1]);
+        lastTouchCenter = getCenter(touches[0], touches[1]);
+      } else if (touches.length === 1) {
+        lastPanPoint = touches[0];
+      }
+    }
+
+    function handleTouchMove(evt) {
+      evt.preventDefault();
+      const touches = getTouchPos(evt);
+      if (touches.length === 2 && ongoingTouches.length >= 2) {
+        const newDistance = getDistance(touches[0], touches[1]);
+        const factor = newDistance / lastTouchDistance;
+        const newCenter = getCenter(touches[0], touches[1]);
+        viewOffsetX = newCenter.x - factor * (newCenter.x - viewOffsetX);
+        viewOffsetY = newCenter.y - factor * (newCenter.y - viewOffsetY);
+        viewScale *= factor;
+        lastTouchDistance = newDistance;
+        lastTouchCenter = newCenter;
+      } else if (touches.length === 1 && ongoingTouches.length === 1) {
+        const dx = touches[0].x - lastPanPoint.x;
+        const dy = touches[0].y - lastPanPoint.y;
+        viewOffsetX += dx;
+        viewOffsetY += dy;
+        lastPanPoint = touches[0];
+      }
+      ongoingTouches = touches;
+      draw();
+    }
+
+    function handleTouchEnd(evt) {
+      evt.preventDefault();
+      const touches = getTouchPos(evt);
+      ongoingTouches = touches;
+      if (touches.length < 2) {
+        lastTouchDistance = null;
+        lastTouchCenter = null;
+      }
+      if (touches.length === 0) {
+        isPanning = false;
+      }
+    }
+
+    function getDistance(p1, p2) {
+      const dx = p2.x - p1.x;
+      const dy = p2.y - p1.y;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    function getCenter(p1, p2) {
+      return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+    }
+
+    /* =========================================================================
+       DXF Parsing Functions
+       ========================================================================= */
+    function parseDXF(text) {
+      const lines = text.split(/\r\n|\n/);
+      const dxf = { entities: [], blocks: {} };
+      let i = 0;
+      while (i < lines.length) {
+        let code = lines[i].trim();
+        let value = lines[i + 1] ? lines[i + 1].trim() : "";
+        if (code === "0" && value === "SECTION") {
+          i += 2;
+          if (lines[i].trim() === "2") {
+            const sectionName = lines[i + 1].trim();
+            i += 2;
+            if (sectionName === "BLOCKS") {
+              while (i < lines.length) {
+                code = lines[i].trim();
+                value = lines[i + 1] ? lines[i + 1].trim() : "";
+                if (code === "0" && value === "ENDSEC") {
+                  i += 2;
+                  break;
+                }
+                if (code === "0" && value === "BLOCK") {
+                  const block = { name: "", basePoint: { x: 0, y: 0 }, entities: [] };
+                  i += 2;
+                  while (i < lines.length) {
+                    code = lines[i].trim();
+                    value = lines[i + 1] ? lines[i + 1].trim() : "";
+                    if (code === "0" && (value === "ENDBLK" ||
+                        ["LINE", "CIRCLE", "ARC", "LWPOLYLINE", "POLYLINE", "TEXT", "MTEXT"].includes(value))) break;
+                    if (code === "2") {
+                      block.name = value;
+                    } else if (code === "10") {
+                      block.basePoint.x = parseFloat(value);
+                    } else if (code === "20") {
+                      block.basePoint.y = parseFloat(value);
+                    }
+                    i += 2;
+                  }
+                  while (i < lines.length) {
+                    code = lines[i].trim();
+                    value = lines[i + 1] ? lines[i + 1].trim() : "";
+                    if (code === "0" && value === "ENDBLK") {
+                      i += 2;
+                      break;
+                    }
+                    if (code === "0") {
+                      const result = parseEntity(lines, i);
+                      if (result) {
+                        block.entities.push(result.entity);
+                        i = result.nextIndex;
+                        continue;
+                      }
+                    }
+                    i += 2;
+                  }
+                  dxf.blocks[block.name] = block;
+                  continue;
+                }
+                i += 2;
+              }
+            } else if (sectionName === "ENTITIES") {
+              while (i < lines.length) {
+                code = lines[i].trim();
+                value = lines[i + 1] ? lines[i + 1].trim() : "";
+                if (code === "0" && value === "ENDSEC") {
+                  i += 2;
+                  break;
+                }
+                if (code === "0") {
+                  const result = parseEntity(lines, i);
+                  if (result) {
+                    const entity = result.entity;
+                    i = result.nextIndex;
+                    if (entity.type === "INSERT") {
+                      entity.attribs = [];
+                      while (i < lines.length) {
+                        let codePeek = lines[i].trim();
+                        let valuePeek = lines[i + 1] ? lines[i + 1].trim() : "";
+                        if (codePeek === "0" && valuePeek === "ATTRIB") {
+                          const attribResult = parseEntity(lines, i);
+                          if (attribResult) {
+                            entity.attribs.push(attribResult.entity);
+                            i = attribResult.nextIndex;
+                            continue;
+                          }
+                        }
+                        break;
+                      }
+                    }
+                    dxf.entities.push(entity);
+                    continue;
+                  }
+                }
+                i += 2;
+              }
+            } else {
+              while (i < lines.length) {
+                code = lines[i].trim();
+                value = lines[i + 1] ? lines[i + 1].trim() : "";
+                if (code === "0" && value === "ENDSEC") {
+                  i += 2;
+                  break;
+                }
+                i += 2;
+              }
+            }
+            continue;
+          }
+        }
+        i += 2;
+      }
+      return dxf;
+    }
+
+    function parseEntity(lines, i) {
+      if (i >= lines.length) return null;
+      let code = lines[i].trim();
+      let value = lines[i + 1] ? lines[i + 1].trim() : "";
+      if (code !== "0") return null;
+      const entity = { type: value };
+      i += 2;
+      if (entity.type === "POLYLINE") {
+        entity.vertices = [];
+        while (i < lines.length) {
+          code = lines[i].trim();
+          value = lines[i + 1] ? lines[i + 1].trim() : "";
+          if (code === "0" && (value === "VERTEX" || value === "SEQEND")) break;
+          entity[code] = value;
+          i += 2;
+        }
+        while (i < lines.length) {
+          code = lines[i].trim();
+          value = lines[i + 1] ? lines[i + 1].trim() : "";
+          if (code === "0" && value === "VERTEX") {
+            let vertex = {};
+            i += 2;
+            while (i < lines.length) {
+              let vCode = lines[i].trim();
+              let vValue = lines[i + 1] ? lines[i + 1].trim() : "";
+              if (vCode === "0") break;
+              if (vCode === "10") vertex.x = parseFloat(vValue);
+              else if (vCode === "20") vertex.y = parseFloat(vValue);
+              i += 2;
+            }
+            entity.vertices.push(vertex);
+            continue;
+          } else if (code === "0" && value === "SEQEND") {
+            i += 2;
+            break;
+          } else {
+            i += 2;
+          }
+        }
+        return { entity, nextIndex: i };
+      } else if (entity.type === "LWPOLYLINE") {
+        entity.vertices = [];
+        while (i < lines.length) {
+          code = lines[i].trim();
+          value = lines[i + 1] ? lines[i + 1].trim() : "";
+          if (code === "10") {
+            let vertex = { x: parseFloat(value) };
+            i += 2;
+            if (i < lines.length && lines[i].trim() === "20") {
+              vertex.y = parseFloat(lines[i + 1].trim());
+              i += 2;
+            }
+            entity.vertices.push(vertex);
+          } else if (code === "0") {
+            break;
+          } else {
+            entity[code] = value;
+            i += 2;
+          }
+        }
+        return { entity, nextIndex: i };
+      } else {
+        while (i < lines.length) {
+          code = lines[i].trim();
+          if (code === "0") break;
+          value = lines[i + 1] ? lines[i + 1].trim() : "";
+          entity[code] = value;
+          i += 2;
+        }
+        return { entity, nextIndex: i };
+      }
+    }
+
+    /* =========================================================================
+       Compute Initial View (bounding box, centering, scaling)
+       ========================================================================= */
+    function setInitialView() {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      function considerPoint(x, y) {
+        if (isNaN(x) || isNaN(y)) return;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+      function processEntity(entity) {
+        switch (entity.type) {
+          case "LINE":
+            considerPoint(parseFloat(entity["10"]), parseFloat(entity["20"]));
+            considerPoint(parseFloat(entity["11"]), parseFloat(entity["21"]));
+            break;
+          case "CIRCLE":
+            {
+              const cx = parseFloat(entity["10"]);
+              const cy = parseFloat(entity["20"]);
+              const r = parseFloat(entity["40"]);
+              considerPoint(cx - r, cy - r);
+              considerPoint(cx + r, cy + r);
+            }
+            break;
+          case "ARC":
+            {
+              const cx = parseFloat(entity["10"]);
+              const cy = parseFloat(entity["20"]);
+              const r = parseFloat(entity["40"]);
+              considerPoint(cx - r, cy - r);
+              considerPoint(cx + r, cy + r);
+            }
+            break;
+          case "POLYLINE":
+          case "LWPOLYLINE":
+            if (entity.vertices) {
+              entity.vertices.forEach(v => considerPoint(v.x, v.y));
+            }
+            break;
+          case "TEXT":
+          case "MTEXT":
+          case "ATTRIB":
+            considerPoint(parseFloat(entity["10"]), parseFloat(entity["20"]));
+            break;
+          case "INSERT":
+            considerPoint(parseFloat(entity["10"]), parseFloat(entity["20"]));
+            break;
+        }
+      }
+      dxf.entities.forEach(processEntity);
+      for (let name in dxf.blocks) {
+        let block = dxf.blocks[name];
+        considerPoint(block.basePoint.x, block.basePoint.y);
+        if (block.entities) block.entities.forEach(processEntity);
+      }
+      if (minX === Infinity) { minX = -100; minY = -100; maxX = 100; maxY = 100; }
+      const drawingWidth = maxX - minX;
+      const drawingHeight = maxY - minY;
+      const scaleX = canvas.width / drawingWidth;
+      const scaleY = canvas.height / drawingHeight;
+      baseScale = 0.9 * Math.min(scaleX, scaleY);
+      const centerX = (minX + maxX) / 2;
+      const centerY = (minY + maxY) / 2;
+      viewScale = baseScale;
+      baseOffsetX = canvas.width / 2 - baseScale * centerX;
+      baseOffsetY = canvas.height / 2 + baseScale * centerY;
+      viewOffsetX = baseOffsetX;
+      viewOffsetY = baseOffsetY;
+    }
+
+    /* =========================================================================
+       Drawing Functions
+       ========================================================================= */
+    function draw() {
+      // Clear the canvas
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.restore();
+
+      // Set the world transform (flip Y so that DXF "Y up" is preserved)
+      ctx.setTransform(viewScale, 0, 0, -viewScale, viewOffsetX, viewOffsetY);
+
+      // Draw grid (if enabled)
+      if (gridEnabled) drawGrid();
+
+      // Draw each top–level entity
+      dxf.entities.forEach(entity => {
+        drawEntity(entity);
+      });
+    }
+
+    function drawGrid() {
+      const gridSpacing = 10;
+      const topLeft = screenToWorld(0, 0);
+      const bottomRight = screenToWorld(canvas.width, canvas.height);
+      const startX = Math.floor(topLeft.x / gridSpacing) * gridSpacing;
+      const endX = Math.ceil(bottomRight.x / gridSpacing) * gridSpacing;
+      const startY = Math.floor(bottomRight.y / gridSpacing) * gridSpacing;
+      const endY = Math.ceil(topLeft.y / gridSpacing) * gridSpacing;
+      ctx.save();
+      ctx.lineWidth = 0.5 / viewScale;
+      ctx.strokeStyle = "#ddd";
+      ctx.beginPath();
+      for (let x = startX; x <= endX; x += gridSpacing) {
+        ctx.moveTo(x, startY);
+        ctx.lineTo(x, endY);
+      }
+      for (let y = startY; y <= endY; y += gridSpacing) {
+        ctx.moveTo(startX, y);
+        ctx.lineTo(endX, y);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function screenToWorld(sx, sy) {
+      const x = (sx - viewOffsetX) / viewScale;
+      const y = -(sy - viewOffsetY) / viewScale;
+      return { x, y };
+    }
+    function worldToScreen(x, y) {
+      return { x: viewScale * x + viewOffsetX, y: -viewScale * y + viewOffsetY };
+    }
+
+    // Draw a DXF entity (dispatches to specific routines)
+    function drawEntity(entity) {
+      if (entity.type === "TEXT" || entity.type === "ATTRIB") {
+        drawSimpleText(entity);
+        return;
+      }
+      if (entity.type === "MTEXT") {
+        drawMTEXT(entity);
+        return;
+      }
+      if (entity.type === "INSERT") {
+        ctx.save();
+        const blockName = entity["2"];
+        const block = dxf.blocks[blockName];
+        if (block) {
+          const insX = parseFloat(entity["10"]) || 0;
+          const insY = parseFloat(entity["20"]) || 0;
+          const scaleX = entity["41"] ? parseFloat(entity["41"]) : 1;
+          const scaleY = entity["42"] ? parseFloat(entity["42"]) : 1;
+          const rotation = entity["50"] ? degToRad(parseFloat(entity["50"])) : 0;
+          const bp = block.basePoint || { x: 0, y: 0 };
+          ctx.translate(insX, insY);
+          ctx.rotate(rotation);
+          ctx.scale(scaleX, scaleY);
+          ctx.translate(-bp.x, -bp.y);
+          block.entities.forEach(be => drawEntity(be));
+          if (entity.attribs) {
+            entity.attribs.forEach(attr => drawEntity(attr));
+          }
+        }
+        ctx.restore();
+        return;
+      }
+      ctx.save();
+      ctx.lineWidth = 1 / viewScale;
+      ctx.strokeStyle = "#000";
+      ctx.fillStyle = "#000";
+      switch (entity.type) {
+        case "LINE":
+          {
+            const x1 = parseFloat(entity["10"]);
+            const y1 = parseFloat(entity["20"]);
+            const x2 = parseFloat(entity["11"]);
+            const y2 = parseFloat(entity["21"]);
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+          }
+          break;
+        case "CIRCLE":
+          {
+            const cx = parseFloat(entity["10"]);
+            const cy = parseFloat(entity["20"]);
+            const r = parseFloat(entity["40"]);
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+            ctx.stroke();
+          }
+          break;
+        case "ARC":
+          {
+            const cx = parseFloat(entity["10"]);
+            const cy = parseFloat(entity["20"]);
+            const r = parseFloat(entity["40"]);
+            const startAngle = degToRad(parseFloat(entity["50"] || "0"));
+            const endAngle = degToRad(parseFloat(entity["51"] || "0"));
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, startAngle, endAngle);
+            ctx.stroke();
+          }
+          break;
+        case "POLYLINE":
+        case "LWPOLYLINE":
+          {
+            if (entity.vertices && entity.vertices.length > 0) {
+              ctx.beginPath();
+              ctx.moveTo(entity.vertices[0].x, entity.vertices[0].y);
+              for (let i = 1; i < entity.vertices.length; i++) {
+                ctx.lineTo(entity.vertices[i].x, entity.vertices[i].y);
+              }
+              if (entity["70"] && (parseInt(entity["70"]) & 1)) {
+                ctx.closePath();
+              }
+              ctx.stroke();
+            }
+          }
+          break;
+        default:
+          break;
+      }
+      ctx.restore();
+    }
+
+    // Draw simple (unformatted) TEXT and ATTRIB entities
+    function drawSimpleText(entity) {
+      const x = parseFloat(entity["10"]);
+      const y = parseFloat(entity["20"]);
+      const height = entity["40"] ? parseFloat(entity["40"]) : 12;
+      const rotation = entity["50"] ? degToRad(parseFloat(entity["50"])) : 0;
+      const text = entity["1"] || "";
+      const screen = worldToScreen(x, y);
+      const screenFontSize = height * viewScale;
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.translate(screen.x, screen.y);
+      ctx.rotate(-rotation);
+      ctx.fillStyle = "#000";
+      ctx.font = `${screenFontSize}px ${entity["7"] || "sans-serif"}`;
+      ctx.textBaseline = "middle";
+      ctx.fillText(text, 0, 0);
+      ctx.restore();
+    }
+
+    /* =========================================================================
+       Comprehensive MTEXT Parsing & Rendering
+       =========================================================================
+       The following functions parse the raw MTEXT string (which may include
+       nested groups such as {\H1.5x;...} and inline control codes like \P for
+       paragraph breaks, \L/\l for underline toggling, etc.). They return an
+       array of segments (or tokens) each carrying a style object.
+    */
+    function parseMTEXTContent(rawText, defaultSize, defaultFont) {
+      // Replace common DXF escape sequences (e.g. "%%d" for degree)
+      rawText = rawText.replace(/%%d/g, "°");
+      rawText = rawText.replace(/%%c/g, "Ø");
+      let defaultStyle = { scale: 1, font: defaultFont, underline: false, bold: false, italic: false, color: "#000" };
+      let result = parseFormattedText(rawText, 0, defaultStyle);
+      return result.segments;
+    }
+
+    // Recursive parser for formatted text
+    function parseFormattedText(text, pos, currentStyle) {
+      let segments = [];
+      let currentSegment = { text: "", style: Object.assign({}, currentStyle) };
+      while (pos < text.length) {
+        let ch = text[pos];
+        if (ch === '{') {
+          if (currentSegment.text) {
+            segments.push(currentSegment);
+            currentSegment = { text: "", style: Object.assign({}, currentStyle) };
+          }
+          let groupResult = parseGroup(text, pos + 1, Object.assign({}, currentStyle));
+          segments.push(...groupResult.segments);
+          pos = groupResult.pos;
+        } else if (ch === '}') {
+          if (currentSegment.text) segments.push(currentSegment);
+          return { segments: segments, pos: pos + 1 };
+        } else if (ch === '\\') {
+          // Check for control codes
+          if (text.substr(pos, 2) === '\\P') {
+            if (currentSegment.text) segments.push(currentSegment);
+            segments.push({ paragraphBreak: true });
+            pos += 2;
+            currentSegment = { text: "", style: Object.assign({}, currentStyle) };
+            continue;
+          } else if (text.substr(pos, 2) === '\\L') {
+            currentStyle.underline = true;
+            pos += 2;
+            continue;
+          } else if (text.substr(pos, 2) === '\\l') {
+            currentStyle.underline = false;
+            pos += 2;
+            continue;
+          } else {
+            // Unrecognized control—add the backslash literally.
+            currentSegment.text += ch;
+            pos++;
+          }
+        } else {
+          currentSegment.text += ch;
+          pos++;
+        }
+      }
+      if (currentSegment.text) segments.push(currentSegment);
+      return { segments: segments, pos: pos };
+    }
+
+    // Parses a group (delimited by {}) that may begin with a formatting code.
+    function parseGroup(text, pos, currentStyle) {
+      if (text.substr(pos, 2) === '\\H') {
+        pos += 2;
+        let multiplierStr = "";
+        while (pos < text.length && text[pos] !== 'x') {
+          multiplierStr += text[pos];
+          pos++;
+        }
+        let multiplier = parseFloat(multiplierStr);
+        pos++; // skip 'x'
+        if (text[pos] === ';') pos++;
+        let newStyle = Object.assign({}, currentStyle);
+        newStyle.scale = currentStyle.scale * multiplier;
+        let result = parseFormattedText(text, pos, newStyle);
+        return { segments: result.segments, pos: result.pos };
+      } else if (text.substr(pos, 2) === '\\F') {
+        pos += 2;
+        let fontName = "";
+        while (pos < text.length && text[pos] !== ';') {
+          fontName += text[pos];
+          pos++;
+        }
+        if (text[pos] === ';') pos++;
+        let newStyle = Object.assign({}, currentStyle);
+        newStyle.font = fontName;
+        let result = parseFormattedText(text, pos, newStyle);
+        return { segments: result.segments, pos: result.pos };
+      } else {
+        return parseFormattedText(text, pos, currentStyle);
+      }
+    }
+
+    // Measure the rendered width (in pixels) of a text segment.
+    function measureSegment(segment, defaultSize) {
+      let size = defaultSize * (segment.style.scale || 1) * viewScale;
+      let font = segment.style.font || "sans-serif";
+      let weight = segment.style.bold ? "bold " : "";
+      let italic = segment.style.italic ? "italic " : "";
+      ctx.font = italic + weight + size + "px " + font;
+      return ctx.measureText(segment.text).width;
+    }
+
+    // Given an array of segments (for one paragraph), perform word wrapping if needed.
+    function wrapMTEXTSegments(segments, maxWidth, defaultSize) {
+      let lines = [];
+      let currentLine = [];
+      let currentLineWidth = 0;
+      for (let seg of segments) {
+        if (seg.paragraphBreak) {
+          lines.push(currentLine);
+          currentLine = [];
+          currentLineWidth = 0;
+          continue;
+        }
+        let tokens = seg.text.split(/(\s+)/); // split on whitespace, keeping it
+        for (let token of tokens) {
+          if (token === "") continue;
+          let tokenSegment = { text: token, style: seg.style };
+          let tokenWidth = measureSegment(tokenSegment, defaultSize);
+          if (currentLineWidth + tokenWidth > maxWidth && currentLine.length > 0) {
+            lines.push(currentLine);
+            currentLine = [];
+            currentLineWidth = 0;
+          }
+          currentLine.push(tokenSegment);
+          currentLineWidth += tokenWidth;
+        }
+      }
+      if (currentLine.length > 0) lines.push(currentLine);
+      return lines;
+    }
+
+    // Utility: Convert degrees to radians.
+    function degToRad(deg) {
+      return (deg * Math.PI) / 180;
+    }
+
+    /* =========================================================================
+       MTEXT Rendering – Comprehensive, Rich-Text Layout & Drawing
+       =========================================================================
+       For an MTEXT entity, we parse the raw text into segments with associated
+       styles, split into paragraphs (via \P), perform word wrapping if a text-
+       box width (group code 41) is defined, and then lay out the text block
+       honoring the attachment point (group code 71) and any rotation.
+    */
+    function drawMTEXT(entity) {
+      const x = parseFloat(entity["10"]);
+      const y = parseFloat(entity["20"]);
+      const defaultSize = entity["40"] ? parseFloat(entity["40"]) : 12;
+      const rotation = entity["50"] ? degToRad(parseFloat(entity["50"])) : 0;
+      const rawText = entity["1"] || "";
+      const defaultFont = entity["7"] || "sans-serif";
+      let parsedSegments = parseMTEXTContent(rawText, defaultSize, defaultFont);
+
+      // Split segments into paragraphs (using our special paragraphBreak marker)
+      let paragraphs = [];
+      let currentParagraph = [];
+      for (let seg of parsedSegments) {
+        if (seg.paragraphBreak) {
+          paragraphs.push(currentParagraph);
+          currentParagraph = [];
+        } else {
+          currentParagraph.push(seg);
+        }
+      }
+      if (currentParagraph.length > 0) paragraphs.push(currentParagraph);
+
+      // Check for word wrapping: group code 41 defines the text box width (in drawing units)
+      let maxWidth = parseFloat(entity["41"]) || 0;
+      let wrappedLines = [];
+      if (maxWidth > 0) {
+        let maxWidthScreen = maxWidth * viewScale;
+        for (let para of paragraphs) {
+          let lines = wrapMTEXTSegments(para, maxWidthScreen, defaultSize);
+          wrappedLines.push(...lines);
+        }
+      } else {
+        for (let para of paragraphs) {
+          wrappedLines.push(para);
+        }
+      }
+
+      // Determine alignment from group code 71:
+      // 1 = top left, 2 = top center, 3 = top right,
+      // 4 = middle left, 5 = middle center, 6 = middle right,
+      // 7 = bottom left, 8 = bottom center, 9 = bottom right.
+      let align = parseInt(entity["71"]) || 1;
+      let hAlign = align % 3; // 1: left, 2: center, 0: right (since 3 mod 3 = 0)
+      let vAlign = Math.floor((align - 1) / 3); // 0: top, 1: middle, 2: bottom
+
+      // Compute each line’s width and overall text block height.
+      let lineHeight = defaultSize * viewScale * 1.2; // rough estimate
+      let totalHeight = wrappedLines.length * lineHeight;
+      let lineWidths = [];
+      let maxLineWidth = 0;
+      for (let line of wrappedLines) {
+        let width = 0;
+        for (let seg of line) {
+          width += measureSegment(seg, defaultSize);
+        }
+        lineWidths.push(width);
+        if (width > maxLineWidth) maxLineWidth = width;
+      }
+      let offsetY = 0;
+      if (vAlign === 1) offsetY = -totalHeight / 2;
+      else if (vAlign === 2) offsetY = -totalHeight;
+
+      // Draw the formatted MTEXT block.
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      let screenPos = worldToScreen(x, y);
+      ctx.translate(screenPos.x, screenPos.y);
+      ctx.rotate(-rotation);
+      ctx.translate(0, offsetY);
+      for (let i = 0; i < wrappedLines.length; i++) {
+        let line = wrappedLines[i];
+        let lineWidth = lineWidths[i];
+        let offsetX = 0;
+        if (hAlign === 2) offsetX = (maxLineWidth - lineWidth) / 2;
+        else if (hAlign === 0) offsetX = (maxLineWidth - lineWidth);
+        ctx.save();
+        ctx.translate(offsetX, i * lineHeight);
+        let xPos = 0;
+        for (let seg of line) {
+          let segStyle = seg.style;
+          let segSize = defaultSize * (segStyle.scale || 1) * viewScale;
+          let segFont = segStyle.font || defaultFont;
+          let segWeight = segStyle.bold ? "bold " : "";
+          let segItalic = segStyle.italic ? "italic " : "";
+          ctx.font = segItalic + segWeight + segSize + "px " + segFont;
+          ctx.fillStyle = segStyle.color || "#000";
+          ctx.textBaseline = "middle";
+          ctx.fillText(seg.text, xPos, 0);
+          // If underline is active, draw a line under the text.
+          if (segStyle.underline) {
+            let metrics = ctx.measureText(seg.text);
+            let underlineY = segSize * 0.6;
+            ctx.beginPath();
+            ctx.moveTo(xPos, underlineY);
+            ctx.lineTo(xPos + metrics.width, underlineY);
+            ctx.lineWidth = Math.max(1, segSize / 15);
+            ctx.strokeStyle = ctx.fillStyle;
+            ctx.stroke();
+          }
+          xPos += ctx.measureText(seg.text).width;
+        }
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+
+    /* =========================================================================
+       End Comprehensive MTEXT Functions
+       ========================================================================= */
+
+    // Initial draw
+    draw();
+  </script>
+</body>
+</html>
