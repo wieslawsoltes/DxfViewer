@@ -586,7 +586,7 @@ function measureSegment(segment, defaultSize, viewport) {
               const dashArray = ltype.pattern.map(d => {
                 const absValue = Math.abs(d);
                 const dashLength = (absValue === 0 ? 0.5 : absValue);
-                return dashLength * viewport.viewScale * patternScale;
+                return dashLength * patternScale;
               });
               return dashArray;
             }
