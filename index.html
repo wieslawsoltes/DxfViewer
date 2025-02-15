@@ -460,8 +460,8 @@
         }
         return { entity: entity, nextIndex: i };
       } else if (entity.type === "HATCH") {
-        // For our simplified hatch, we parse additional boundary points.
-        // Improved to allow for multiple loops if needed.
+        // For our simplified hatch, we parse boundary points and additional hatch parameters.
+        // Boundary points (group codes 10/20) are collected into entity.boundary.
         entity.boundary = [];
         while (i < lines.length) {
           code = lines[i].trim();
@@ -477,6 +477,8 @@
               continue;
             }
           } else {
+            // Also capture additional hatch properties like:
+            // 70: solid fill flag, 2: pattern name, 52: pattern angle, 41: hatch spacing, 51: pattern offset.
             entity[code] = value;
             i += 2;
           }
@@ -580,6 +582,39 @@
       baseOffsetY = canvas.height/2 + baseScale*centerY;
       viewOffsetX = baseOffsetX;
       viewOffsetY = baseOffsetY;
+    }
+
+    /* =========================================================================
+       Helper Functions for Hatch Patterns
+    ========================================================================= */
+    // Compute a bounding box from a boundary (single loop or multiple loops)
+    function computeBBox(boundary) {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      if (Array.isArray(boundary[0])) {
+        boundary.forEach(loop => {
+          loop.forEach(pt => {
+            minX = Math.min(minX, pt.x);
+            minY = Math.min(minY, pt.y);
+            maxX = Math.max(maxX, pt.x);
+            maxY = Math.max(maxY, pt.y);
+          });
+        });
+      } else {
+        boundary.forEach(pt => {
+          minX = Math.min(minX, pt.x);
+          minY = Math.min(minY, pt.y);
+          maxX = Math.max(maxX, pt.x);
+          maxY = Math.max(maxY, pt.y);
+        });
+      }
+      return { minX, minY, maxX, maxY };
+    }
+    // Rotate a point by a given angle (in radians)
+    function rotatePoint(x, y, angle) {
+      return {
+        x: x * Math.cos(angle) - y * Math.sin(angle),
+        y: x * Math.sin(angle) + y * Math.cos(angle)
+      };
     }
 
     /* =========================================================================
@@ -871,40 +906,116 @@
 
     /* =========================================================================
        Hatch Rendering
-       (Improved to support single or multiple boundary loops)
+       (Enhanced to support both solid and pattern fills)
     ========================================================================= */
     function drawHatch(entity) {
       if (!entity.boundary || entity.boundary.length === 0) return;
-      ctx.save();
-      // Use the entity's color or a default fill.
-      let fillColor = getEntityColor(entity) || "#cccccc";
-      ctx.fillStyle = fillColor;
-      ctx.strokeStyle = fillColor;
-      ctx.lineWidth = 1 / viewScale;
       
-      // Check if boundary is an array of arrays (multiple loops) or a single loop.
-      if (Array.isArray(entity.boundary[0])) {
-        entity.boundary.forEach(loop => {
-          if (loop.length > 0) {
-            ctx.beginPath();
-            ctx.moveTo(loop[0].x, loop[0].y);
-            for (let i = 1; i < loop.length; i++) {
-              ctx.lineTo(loop[i].x, loop[i].y);
-            }
-            ctx.closePath();
-          }
-        });
-      } else {
-        ctx.beginPath();
-        ctx.moveTo(entity.boundary[0].x, entity.boundary[0].y);
-        for (let i = 1; i < entity.boundary.length; i++) {
-          ctx.lineTo(entity.boundary[i].x, entity.boundary[i].y);
-        }
-        ctx.closePath();
+      // Determine whether to use solid fill or pattern fill.
+      // Group code 70 may indicate the fill style; also check the pattern name (group code 2).
+      let isSolid = false;
+      if (entity["70"] !== undefined) {
+        isSolid = (parseInt(entity["70"]) & 1) !== 0;
       }
-      ctx.fill();
-      ctx.stroke();
-      ctx.restore();
+      if (entity["2"]) {
+        let patternName = entity["2"].toUpperCase();
+        if (patternName === "SOLID" || patternName === "*SOLID") {
+          isSolid = true;
+        }
+      }
+      
+      if (isSolid) {
+        // Solid fill: simply create a path from the boundary and fill it.
+        ctx.save();
+        let fillColor = getEntityColor(entity) || "#cccccc";
+        ctx.fillStyle = fillColor;
+        ctx.strokeStyle = fillColor;
+        ctx.lineWidth = 1 / viewScale;
+        ctx.beginPath();
+        if (Array.isArray(entity.boundary[0])) {
+          entity.boundary.forEach(loop => {
+            if (loop.length > 0) {
+              ctx.moveTo(loop[0].x, loop[0].y);
+              for (let i = 1; i < loop.length; i++) {
+                ctx.lineTo(loop[i].x, loop[i].y);
+              }
+              ctx.closePath();
+            }
+          });
+        } else {
+          ctx.moveTo(entity.boundary[0].x, entity.boundary[0].y);
+          for (let i = 1; i < entity.boundary.length; i++) {
+            ctx.lineTo(entity.boundary[i].x, entity.boundary[i].y);
+          }
+          ctx.closePath();
+        }
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      } else {
+        // Pattern fill: use hatch parameters to draw parallel lines inside the hatch.
+        ctx.save();
+        // Create a clipping path from the hatch boundary.
+        ctx.beginPath();
+        if (Array.isArray(entity.boundary[0])) {
+          entity.boundary.forEach(loop => {
+            if (loop.length > 0) {
+              ctx.moveTo(loop[0].x, loop[0].y);
+              for (let i = 1; i < loop.length; i++) {
+                ctx.lineTo(loop[i].x, loop[i].y);
+              }
+              ctx.closePath();
+            }
+          });
+        } else {
+          ctx.moveTo(entity.boundary[0].x, entity.boundary[0].y);
+          for (let i = 1; i < entity.boundary.length; i++) {
+            ctx.lineTo(entity.boundary[i].x, entity.boundary[i].y);
+          }
+          ctx.closePath();
+        }
+        ctx.clip();
+        
+        // Get hatch pattern parameters.
+        let patternAngle = degToRad(parseFloat(entity["52"]) || 0);
+        let spacing = parseFloat(entity["41"]) || 10; // default spacing if not provided
+        
+        // Compute bounding box for the hatch boundary.
+        let bbox = computeBBox(entity.boundary);
+        
+        // Rotate coordinate system so that hatch lines become horizontal.
+        ctx.save();
+        ctx.rotate(-patternAngle);
+        
+        // Transform bbox corners to the rotated coordinate system to compute vertical span.
+        let corners = [
+          {x: bbox.minX, y: bbox.minY},
+          {x: bbox.maxX, y: bbox.minY},
+          {x: bbox.maxX, y: bbox.maxY},
+          {x: bbox.minX, y: bbox.maxY}
+        ];
+        let rotatedYs = corners.map(pt => {
+          let r = rotatePoint(pt.x, pt.y, -patternAngle);
+          return r.y;
+        });
+        let minY = Math.min(...rotatedYs);
+        let maxY = Math.max(...rotatedYs);
+        
+        // Draw horizontal lines spaced by "spacing".
+        ctx.beginPath();
+        let lineStartX = bbox.minX - spacing;
+        let lineEndX = bbox.maxX + spacing;
+        for (let y = minY - spacing; y <= maxY + spacing; y += spacing) {
+          ctx.moveTo(lineStartX, y);
+          ctx.lineTo(lineEndX, y);
+        }
+        ctx.strokeStyle = getEntityColor(entity);
+        ctx.lineWidth = 1 / viewScale;
+        ctx.stroke();
+        ctx.restore(); // restore rotation
+        
+        ctx.restore(); // restore clipping region
+      }
     }
 
     /* =========================================================================
