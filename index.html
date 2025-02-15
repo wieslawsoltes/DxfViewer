@@ -907,144 +907,142 @@ function measureSegment(segment, defaultSize, viewport) {
           this.boundaryLoops = [];
           this.isSolid = false;
           this.patternName = "";
-          // New hatch pattern properties (default values)
-          this.patternAngle = 0; // in degrees
+          // Hatch pattern properties
+          this.patternAngle = 0; // degrees
           this.patternScale = 1;
-          this.patternOffset = { x: 0, y: 0 }; // available for future use
+          this.patternOffset = { x: 0, y: 0 };
         }
 
         static parse(lines, i) {
           let hatch = new DXFHatch();
-          i += 2;
-          let loopCount = 0;
+          i += 2; // skip "HATCH" marker
+          let boundaryLoopCount = 0;
           while (i < lines.length) {
             let code = lines[i].trim();
             let value = (lines[i + 1] || "").trim();
             if (code === "0") break;
-            switch (code) {
-              case "70":
-                hatch.isSolid = (parseInt(value, 10) & 1) !== 0;
-                break;
-              case "2":
-                hatch.patternName = value.toUpperCase();
-                break;
-              case "91":
-                loopCount = parseInt(value, 10);
-                break;
-              case "92": {
-                let edgeCount = parseInt(value, 10);
-                let loopPoints = [];
-                for (let j = 0; j < edgeCount; j++) {
+            if (code === "70") {
+              // Bit 0 set means solid fill
+              hatch.isSolid = (parseInt(value, 10) & 1) !== 0;
+            } else if (code === "2") {
+              hatch.patternName = value.toUpperCase();
+            } else if (code === "91") {
+              boundaryLoopCount = parseInt(value, 10);
+            } else if (code === "92") {
+              // Start a new boundary loop. The value tells how many edges are in this loop.
+              let edgeCount = parseInt(value, 10);
+              i += 2;
+              let loopPoints = [];
+              for (let j = 0; j < edgeCount; j++) {
+                // Check if the next group is 72 (edge type)
+                let edgeType = 1; // default to a straight line
+                if (lines[i] && lines[i].trim() === "72") {
+                  edgeType = parseInt(lines[i + 1].trim(), 10);
                   i += 2;
-                  if (i >= lines.length) break;
-                  let edgeTypeCode = lines[i - 2].trim();
-                  let edgeTypeVal = lines[i - 1].trim();
-                  let edgeType = (edgeTypeCode === "72") ? parseInt(edgeTypeVal, 10) : 1;
-                  let edgePoints = [];
-                  if (edgeType === 1) {
-                    // Straight line edge
-                    let start = { x: 0, y: 0 }, end = { x: 0, y: 0 };
-                    while (i < lines.length) {
-                      let c = lines[i].trim();
-                      let v = (lines[i + 1] || "").trim();
-                      if (c === "10") { start.x = parseFloat(v); }
-                      else if (c === "20") { start.y = parseFloat(v); }
-                      else if (c === "11") { end.x = parseFloat(v); }
-                      else if (c === "21") { end.y = parseFloat(v); }
-                      else break;
-                      i += 2;
-                    }
-                    edgePoints = [start, end];
-                  } else if (edgeType === 2) {
-                    // Circular arc edge
-                    let center = { x: 0, y: 0 }, radius = 0, startAngle = 0, endAngle = 0;
-                    while (i < lines.length) {
-                      let c = lines[i].trim();
-                      let v = (lines[i + 1] || "").trim();
-                      if (c === "10") { center.x = parseFloat(v); }
-                      else if (c === "20") { center.y = parseFloat(v); }
-                      else if (c === "40") { radius = parseFloat(v); }
-                      else if (c === "50") { startAngle = DXFUtils.degToRad(parseFloat(v)); }
-                      else if (c === "51") { endAngle = DXFUtils.degToRad(parseFloat(v)); }
-                      else break;
-                      i += 2;
-                    }
-                    if (endAngle < startAngle) endAngle += 2 * Math.PI;
-                    edgePoints = sampleArc(center, radius, startAngle, endAngle);
-                  } else if (edgeType === 3) {
-                    // Elliptical arc edge
-                    let center = { x: 0, y: 0 },
-                      majorVec = { x: 0, y: 0 },
-                      ratio = 1,
-                      startParam = 0,
-                      endParam = 0;
-                    while (i < lines.length) {
-                      let c = lines[i].trim();
-                      let v = (lines[i + 1] || "").trim();
-                      if (c === "10") { center.x = parseFloat(v); }
-                      else if (c === "20") { center.y = parseFloat(v); }
-                      else if (c === "11") { majorVec.x = parseFloat(v); }
-                      else if (c === "21") { majorVec.y = parseFloat(v); }
-                      else if (c === "40") { ratio = parseFloat(v); }
-                      else if (c === "50") { startParam = parseFloat(v); }
-                      else if (c === "51") { endParam = parseFloat(v); }
-                      else break;
-                      i += 2;
-                    }
-                    let majorLength = Math.sqrt(majorVec.x * majorVec.x + majorVec.y * majorVec.y);
-                    let minorLength = majorLength * ratio;
-                    let rotation = Math.atan2(majorVec.y, majorVec.x);
-                    edgePoints = sampleEllipse(center, majorLength, minorLength, rotation, startParam, endParam);
-                  } else if (edgeType === 4) {
-                    // Spline edge (minimal approximation)
-                    let splinePoints = [];
-                    while (i < lines.length) {
-                      let c = lines[i].trim();
-                      if (["0", "92", "93"].includes(c)) break;
-                      if (c === "10") {
-                        let x = parseFloat(lines[i + 1].trim());
-                        i += 2;
-                        let y = 0;
-                        if (i < lines.length && lines[i].trim() === "20") {
-                          y = parseFloat(lines[i + 1].trim());
-                          i += 2;
-                        }
-                        splinePoints.push({ x, y });
-                      } else {
-                        i += 2;
-                      }
-                    }
-                    edgePoints = splinePoints;
-                  } else {
-                    // Unhandled edge type: skip until a recognizable code
-                    while (i < lines.length) {
-                      let c = lines[i].trim();
-                      if (c === "0" || c === "92" || c === "93") break;
-                      i += 2;
-                    }
-                    edgePoints = [];
-                  }
-                  // Remove duplicate point if necessary
-                  if (loopPoints.length > 0 && edgePoints.length > 0) {
-                    let last = loopPoints[loopPoints.length - 1];
-                    let first = edgePoints[0];
-                    if (Math.abs(last.x - first.x) < 1e-6 && Math.abs(last.y - first.y) < 1e-6) {
-                      edgePoints.shift();
-                    }
-                  }
-                  loopPoints.push(...edgePoints);
                 }
-                hatch.boundaryLoops.push(loopPoints);
-                break; // done with this boundary loop
+                let edgePoints = [];
+                if (edgeType === 1) {
+                  // Straight line edge: expect group codes 10,20 for start and 11,21 for end.
+                  let start = {}, end = {};
+                  while (i < lines.length) {
+                    let c = lines[i].trim();
+                    let v = (lines[i + 1] || "").trim();
+                    if (c === "10") { start.x = parseFloat(v); }
+                    else if (c === "20") { start.y = parseFloat(v); }
+                    else if (c === "11") { end.x = parseFloat(v); }
+                    else if (c === "21") { end.y = parseFloat(v); }
+                    else break;
+                    i += 2;
+                  }
+                  if (
+                    start.x !== undefined && start.y !== undefined &&
+                    end.x !== undefined && end.y !== undefined
+                  ) {
+                    edgePoints = [start, end];
+                  }
+                } else if (edgeType === 2) {
+                  // Circular arc edge: codes 10,20 center; 40 radius; 50 start angle; 51 end angle.
+                  let center = {}, radius = 0, startAngle = 0, endAngle = 0;
+                  while (i < lines.length) {
+                    let c = lines[i].trim();
+                    let v = (lines[i + 1] || "").trim();
+                    if (c === "10") { center.x = parseFloat(v); }
+                    else if (c === "20") { center.y = parseFloat(v); }
+                    else if (c === "40") { radius = parseFloat(v); }
+                    else if (c === "50") { startAngle = DXFUtils.degToRad(parseFloat(v)); }
+                    else if (c === "51") { endAngle = DXFUtils.degToRad(parseFloat(v)); }
+                    else break;
+                    i += 2;
+                  }
+                  if (endAngle < startAngle) endAngle += 2 * Math.PI;
+                  edgePoints = sampleArc(center, radius, startAngle, endAngle);
+                } else if (edgeType === 3) {
+                  // Elliptical arc edge: codes 10,20 center; 11,21 major axis vector; 40 ratio; 50 start param; 51 end param.
+                  let center = {}, majorVec = {}, ratio = 1, startParam = 0, endParam = 0;
+                  while (i < lines.length) {
+                    let c = lines[i].trim();
+                    let v = (lines[i + 1] || "").trim();
+                    if (c === "10") { center.x = parseFloat(v); }
+                    else if (c === "20") { center.y = parseFloat(v); }
+                    else if (c === "11") { majorVec.x = parseFloat(v); }
+                    else if (c === "21") { majorVec.y = parseFloat(v); }
+                    else if (c === "40") { ratio = parseFloat(v); }
+                    else if (c === "50") { startParam = parseFloat(v); }
+                    else if (c === "51") { endParam = parseFloat(v); }
+                    else break;
+                    i += 2;
+                  }
+                  let majorLength = Math.sqrt((majorVec.x || 0) ** 2 + (majorVec.y || 0) ** 2);
+                  let minorLength = majorLength * ratio;
+                  let rotation = Math.atan2(majorVec.y || 0, majorVec.x || 0);
+                  edgePoints = sampleEllipse(center, majorLength, minorLength, rotation, startParam, endParam);
+                } else if (edgeType === 4) {
+                  // Spline edge (minimal approximation)
+                  let splinePoints = [];
+                  while (i < lines.length) {
+                    let c = lines[i].trim();
+                    if (["0", "92", "93"].includes(c)) break;
+                    if (c === "10") {
+                      let pt = { x: parseFloat(lines[i + 1].trim()) };
+                      i += 2;
+                      if (i < lines.length && lines[i].trim() === "20") {
+                        pt.y = parseFloat(lines[i + 1].trim());
+                        i += 2;
+                      } else {
+                        pt.y = 0;
+                      }
+                      splinePoints.push(pt);
+                    } else {
+                      i += 2;
+                    }
+                  }
+                  edgePoints = splinePoints;
+                } else {
+                  // Unsupported edge type; skip codes until a recognizable group is found.
+                  while (i < lines.length) {
+                    let c = lines[i].trim();
+                    if (c === "0" || c === "92" || c === "93") break;
+                    i += 2;
+                  }
+                }
+                // If the new edge’s first point is identical to the last point in this loop, remove it.
+                if (loopPoints.length > 0 && edgePoints.length > 0) {
+                  let last = loopPoints[loopPoints.length - 1];
+                  let first = edgePoints[0];
+                  if (Math.abs(last.x - first.x) < 1e-6 && Math.abs(last.y - first.y) < 1e-6) {
+                    edgePoints.shift();
+                  }
+                }
+                loopPoints.push(...edgePoints);
               }
-              default:
-                // For any other group codes, store them in the raw object.
-                hatch.raw[code] = value;
-                break;
+              hatch.boundaryLoops.push(loopPoints);
+              continue; // already advanced i inside the "92" branch
+            } else {
+              hatch.raw[code] = value;
             }
             i += 2;
           }
-          // Extract hatch pattern properties from raw data if available.
+          // Hatch pattern properties (if available)
           if (hatch.raw["52"]) {
             hatch.patternAngle = parseFloat(hatch.raw["52"]);
           }
@@ -1061,35 +1059,29 @@ function measureSegment(segment, defaultSize, viewport) {
           let fillColor = this.getColor(dxfDoc);
           ctx.save();
 
+          // First, create the hatch boundary path
+          this.drawLoopsPath(ctx);
+
           if (this.isSolid || (this.patternName && this.patternName.toUpperCase().includes("SOLID"))) {
-            // Solid fill hatch: fill and stroke the hatch boundaries.
+            // Solid hatch: simply fill (and optionally stroke) the boundary.
             ctx.fillStyle = fillColor;
-            this.drawLoopsPath(ctx);
             ctx.fill();
             ctx.strokeStyle = fillColor;
             ctx.lineWidth = 1 / viewport.viewScale;
             ctx.stroke();
           } else {
-            // Pattern hatch: clip to the hatch boundary first.
-            this.drawLoopsPath(ctx);
+            // Pattern hatch: clip to the hatch boundary then draw the pattern lines.
             ctx.clip();
-
             let bbox = computeBBox(this.boundaryLoops);
             let patternAngleRad = DXFUtils.degToRad(this.patternAngle);
+            // Determine the spacing (you may adjust the constant factor as needed)
             let spacing = (this.patternScale || 1) * 10;
-
-            // Use a pattern offset if provided, otherwise use the lower left corner of the bounding box.
-            let origin = (this.patternOffset && (this.patternOffset.x || this.patternOffset.y))
-              ? { x: this.patternOffset.x, y: this.patternOffset.y }
-              : { x: bbox.minX, y: bbox.minY };
-
-            // Instead of drawing pattern lines in world space using complex point rotations,
-            // set up a transformation that maps pattern coordinates to world coordinates.
             ctx.save();
+            // Use the lower‐left corner of the bounding box as the origin.
+            let origin = { x: bbox.minX, y: bbox.minY };
             ctx.translate(origin.x, origin.y);
             ctx.rotate(patternAngleRad);
-
-            // Determine the bounds in pattern space by transforming the hatch boundary's bbox.
+            // Compute bounds in the “pattern space”
             let pts = [
               { x: bbox.minX - origin.x, y: bbox.minY - origin.y },
               { x: bbox.maxX - origin.x, y: bbox.minY - origin.y },
@@ -1100,12 +1092,12 @@ function measureSegment(segment, defaultSize, viewport) {
             let tMaxX = Math.max(...pts.map(p => p.x));
             let tMinY = Math.min(...pts.map(p => p.y));
             let tMaxY = Math.max(...pts.map(p => p.y));
-
-            // Snap the starting y position to a multiple of spacing.
-            let startY = Math.floor(tMinY / spacing) * spacing;
-
+            // Extend the range a bit to ensure full coverage
+            tMinY -= spacing;
+            tMaxY += spacing;
             ctx.beginPath();
-            for (let y = startY; y <= tMaxY; y += spacing) {
+            // Draw horizontal lines (in pattern space) at intervals of "spacing"
+            for (let y = tMinY; y <= tMaxY; y += spacing) {
               ctx.moveTo(tMinX, y);
               ctx.lineTo(tMaxX, y);
             }
