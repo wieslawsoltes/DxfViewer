@@ -16,14 +16,30 @@
         top: 10px;
         left: 10px;
         z-index: 10;
-        background: rgba(255,255,255,0.95);
+        background: rgba(255, 255, 255, 0.95);
         padding: 10px;
         border-radius: 4px;
-        box-shadow: 0 0 4px rgba(0,0,0,0.3);
+        box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);
       }
       #toolbar button,
       #toolbar input {
         margin: 4px 0;
+      }
+      /* Styling for the rendering options popup */
+      #renderOptions {
+        display: none;
+        position: absolute;
+        top: 50px;
+        left: 10px;
+        background: rgba(255, 255, 255, 0.95);
+        padding: 10px;
+        border-radius: 4px;
+        box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);
+        max-height: 400px;
+        overflow-y: auto;
+      }
+      #renderOptions label {
+        font-size: 14px;
       }
       canvas {
         display: block;
@@ -41,11 +57,92 @@
         <button id="toggleGrid">Toggle Grid</button>
       </div>
       <div style="margin-top:8px;">
+        <button id="toggleRenderOptions">Rendering Options</button>
+      </div>
+      <div id="renderOptions">
+        <div><strong>Entity Types</strong></div>
+        <label>
+          <input type="checkbox" class="entity-toggle" data-type="LINE" checked /> LINE
+        </label><br />
+        <label>
+          <input type="checkbox" class="entity-toggle" data-type="CIRCLE" checked /> CIRCLE
+        </label><br />
+        <label>
+          <input type="checkbox" class="entity-toggle" data-type="ARC" checked /> ARC
+        </label><br />
+        <label>
+          <input type="checkbox" class="entity-toggle" data-type="POLYLINE" checked /> POLYLINE
+        </label><br />
+        <label>
+          <input type="checkbox" class="entity-toggle" data-type="LWPOLYLINE" checked /> LWPOLYLINE
+        </label><br />
+        <label>
+          <input type="checkbox" class="entity-toggle" data-type="HATCH" checked /> HATCH
+        </label><br />
+        <label>
+          <input type="checkbox" class="entity-toggle" data-type="DIMENSION" checked /> DIMENSION
+        </label><br />
+        <label>
+          <input type="checkbox" class="entity-toggle" data-type="MTEXT" checked /> MTEXT
+        </label><br />
+        <label>
+          <input type="checkbox" class="entity-toggle" data-type="SPLINE" checked /> SPLINE
+        </label><br />
+        <label>
+          <input type="checkbox" class="entity-toggle" data-type="INSERT" checked /> INSERT
+        </label><br />
+        <label>
+          <input type="checkbox" class="entity-toggle" data-type="TEXT" checked /> TEXT
+        </label><br />
+        <label>
+          <input type="checkbox" class="entity-toggle" data-type="ATTRIB" checked /> ATTRIB
+        </label><br />
+        <div style="margin-top:10px;"><strong>Rendering Options</strong></div>
+        <label>
+          <input type="checkbox" id="toggleLinetype" /> Disable Linetype Rendering
+        </label><br />
+        <label>
+          <input type="checkbox" id="toggleHatch" /> Disable Hatch Rendering
+        </label><br />
+        <label>
+          <input type="checkbox" id="toggleColor" /> Disable Color Rendering
+        </label><br />
+        <label>
+          <input type="checkbox" id="toggleThickness" /> Disable Thickness Rendering
+        </label><br />
+        <label>
+          <input type="checkbox" id="toggleWidth" /> Disable Width Rendering
+        </label><br />
+      </div>
+      <div style="margin-top:8px;">
         <small>Pan with mouse/touch; wheel or pinch to zoom.</small>
       </div>
     </div>
     <canvas id="canvas"></canvas>
     <script>
+      // Global render settings: each entity type is shown by default and all styling is enabled.
+      const renderSettings = {
+        entity: {
+          LINE: true,
+          CIRCLE: true,
+          ARC: true,
+          POLYLINE: true,
+          LWPOLYLINE: true,
+          HATCH: true,
+          DIMENSION: true,
+          MTEXT: true,
+          SPLINE: true,
+          INSERT: true,
+          TEXT: true,
+          ATTRIB: true
+        },
+        renderLinetype: true,
+        renderHatch: true,
+        renderColor: true,
+        renderThickness: true,
+        renderWidth: true
+      };
+
       // ─────────────────────────────────────────────────────────────
       // Utility functions and classes
       // ─────────────────────────────────────────────────────────────
@@ -64,7 +161,10 @@
 
       // Compute bounding box from a set of points or loops.
       function computeBBox(boundary) {
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        let minX = Infinity,
+          minY = Infinity,
+          maxX = -Infinity,
+          maxY = -Infinity;
         if (Array.isArray(boundary[0])) {
           boundary.forEach(loop => {
             loop.forEach(pt => {
@@ -110,7 +210,14 @@
 
       function parseMTEXTContent(rawText, defaultSize, defaultFont, defaultColor) {
         rawText = rawText.replace(/%%d/g, "°").replace(/%%c/g, "Ø");
-        let defaultStyle = { scale: 1, font: defaultFont, underline: false, bold: false, italic: false, color: defaultColor };
+        let defaultStyle = {
+          scale: 1,
+          font: defaultFont,
+          underline: false,
+          bold: false,
+          italic: false,
+          color: defaultColor
+        };
         let result = parseFormattedText(rawText, 0, defaultStyle);
         return result.segments;
       }
@@ -246,6 +353,7 @@
           return DXFStyle.ACI_COLORS[7] || "#FFFFFF";
         }
         static getEntityColor(entity, dxfDoc) {
+          if (!renderSettings.renderColor) return "#000000";
           if (entity.raw["420"]) {
             let tc = parseInt(entity.raw["420"]);
             let hex = tc.toString(16).padStart(6, "0");
@@ -265,16 +373,27 @@
           return DXFStyle.getACIColor(colorIndex);
         }
         static getLineWidth(entity, viewport) {
+          if (!renderSettings.renderThickness) {
+            return 1 / viewport.viewScale;
+          }
+          let width;
           if (entity.raw["39"] && parseFloat(entity.raw["39"]) !== 0) {
             let thickness = parseFloat(entity.raw["39"]);
-            return Math.max(1, thickness * 3.78) / viewport.viewScale;
+            width = Math.max(1, thickness * 3.78);
           } else if (entity.raw["370"]) {
             let lw_mm = parseInt(entity.raw["370"]) / 100;
-            return Math.max(1, lw_mm * 3.78) / viewport.viewScale;
+            width = Math.max(1, lw_mm * 3.78);
+          } else {
+            width = 1;
           }
-          return 1 / viewport.viewScale;
+          if (renderSettings.renderWidth) {
+            return width / viewport.viewScale;
+          } else {
+            return width;
+          }
         }
         static getEntityLineDash(entity, viewport, dxfDoc) {
+          if (!renderSettings.renderLinetype) return [];
           let linetypeName = entity.raw["6"];
           if (!linetypeName || linetypeName.toUpperCase() === "BYLAYER") {
             if (
@@ -365,6 +484,7 @@
           return { entity: line, nextIndex: i };
         }
         draw(ctx, viewport, dxfDoc) {
+          if (!renderSettings.entity["LINE"]) return;
           this.applyStyle(ctx, viewport, dxfDoc);
           ctx.beginPath();
           ctx.moveTo(this.x1, this.y1);
@@ -406,6 +526,7 @@
           return { entity: circle, nextIndex: i };
         }
         draw(ctx, viewport, dxfDoc) {
+          if (!renderSettings.entity["CIRCLE"]) return;
           this.applyStyle(ctx, viewport, dxfDoc);
           ctx.beginPath();
           ctx.arc(this.cx, this.cy, this.r, 0, 2 * Math.PI);
@@ -454,6 +575,7 @@
           return { entity: arc, nextIndex: i };
         }
         draw(ctx, viewport, dxfDoc) {
+          if (!renderSettings.entity["ARC"]) return;
           this.applyStyle(ctx, viewport, dxfDoc);
           let startRad = DXFUtils.degToRad(this.startAngle);
           let endRad = DXFUtils.degToRad(this.endAngle);
@@ -512,6 +634,7 @@
           return { entity: polyline, nextIndex: i };
         }
         draw(ctx, viewport, dxfDoc) {
+          if (!renderSettings.entity["POLYLINE"]) return;
           if (this.vertices.length === 0) return;
           this.applyStyle(ctx, viewport, dxfDoc);
           ctx.beginPath();
@@ -553,6 +676,7 @@
           return { entity: lwpoly, nextIndex: i };
         }
         draw(ctx, viewport, dxfDoc) {
+          if (!renderSettings.entity["LWPOLYLINE"]) return;
           if (this.vertices.length === 0) return;
           this.applyStyle(ctx, viewport, dxfDoc);
           ctx.beginPath();
@@ -593,6 +717,8 @@
           return { entity: hatch, nextIndex: i };
         }
         draw(ctx, viewport, dxfDoc) {
+          if (!renderSettings.entity["HATCH"]) return;
+          if (!renderSettings.renderHatch) return;
           if (!this.boundary || this.boundary.length === 0) return;
           let isSolid = false;
           if (this.raw["70"] !== undefined) {
@@ -730,6 +856,7 @@
           return { entity: dim, nextIndex: i };
         }
         draw(ctx, viewport, dxfDoc) {
+          if (!renderSettings.entity["DIMENSION"]) return;
           let p1 = this.p1;
           let p2 = this.p2;
           let dx = p2.x - p1.x,
@@ -857,6 +984,7 @@
           return { entity: mtext, nextIndex: i };
         }
         draw(ctx, viewport, dxfDoc) {
+          if (!renderSettings.entity["MTEXT"]) return;
           let x = this.position.x,
             y = this.position.y;
           let defaultSize = this.height;
@@ -1020,6 +1148,7 @@
           return { entity: spline, nextIndex: i };
         }
         draw(ctx, viewport, dxfDoc) {
+          if (!renderSettings.entity["SPLINE"]) return;
           this.applyStyle(ctx, viewport, dxfDoc);
           let samplePoints = [];
           if (
@@ -1123,6 +1252,7 @@
           return { entity: insert, nextIndex: i };
         }
         draw(ctx, viewport, dxfDoc) {
+          if (!renderSettings.entity["INSERT"]) return;
           ctx.save();
           let block = dxfDoc.blocks[this.blockName];
           if (block) {
@@ -1137,10 +1267,14 @@
             ctx.scale(scaleX, scaleY);
             ctx.translate(-bp.x, -bp.y);
             block.entities.forEach(be => {
-              be.draw(ctx, viewport, dxfDoc);
+              if (renderSettings.entity[be.type] !== false) {
+                be.draw(ctx, viewport, dxfDoc);
+              }
             });
             if (this.attribs)
-              this.attribs.forEach(attr => attr.draw(ctx, viewport, dxfDoc));
+              this.attribs.forEach(attr => {
+                if (renderSettings.entity[attr.type] !== false) attr.draw(ctx, viewport, dxfDoc);
+              });
           }
           ctx.restore();
         }
@@ -1191,6 +1325,7 @@
           return { entity: textEntity, nextIndex: i };
         }
         draw(ctx, viewport, dxfDoc) {
+          if (!renderSettings.entity[this.type]) return;
           let x = this.position.x,
             y = this.position.y;
           let height = this.height;
@@ -1684,7 +1819,9 @@
           );
           if (this.gridEnabled) this.drawGrid();
           this.dxfDoc.entities.forEach(entity => {
-            entity.draw(ctx, this.viewport, this.dxfDoc);
+            if (renderSettings.entity[entity.type] !== false) {
+              entity.draw(ctx, this.viewport, this.dxfDoc);
+            }
           });
           ctx.setTransform(1, 0, 0, 1, 0, 0);
         }
@@ -1825,6 +1962,43 @@
       });
       document.getElementById("toggleGrid").addEventListener("click", function () {
         viewer.toggleGrid();
+      });
+
+      // Toggle the rendering options popup
+      document.getElementById("toggleRenderOptions").addEventListener("click", function () {
+        const optionsDiv = document.getElementById("renderOptions");
+        optionsDiv.style.display = optionsDiv.style.display === "none" ? "block" : "none";
+      });
+
+      // Listen for changes to entity type checkboxes.
+      document.querySelectorAll(".entity-toggle").forEach(checkbox => {
+        checkbox.addEventListener("change", function (e) {
+          const type = e.target.getAttribute("data-type");
+          renderSettings.entity[type] = e.target.checked;
+          viewer.draw();
+        });
+      });
+
+      // Listen for changes to rendering option checkboxes.
+      document.getElementById("toggleLinetype").addEventListener("change", function (e) {
+        renderSettings.renderLinetype = !e.target.checked;
+        viewer.draw();
+      });
+      document.getElementById("toggleHatch").addEventListener("change", function (e) {
+        renderSettings.renderHatch = !e.target.checked;
+        viewer.draw();
+      });
+      document.getElementById("toggleColor").addEventListener("change", function (e) {
+        renderSettings.renderColor = !e.target.checked;
+        viewer.draw();
+      });
+      document.getElementById("toggleThickness").addEventListener("change", function (e) {
+        renderSettings.renderThickness = !e.target.checked;
+        viewer.draw();
+      });
+      document.getElementById("toggleWidth").addEventListener("change", function (e) {
+        renderSettings.renderWidth = !e.target.checked;
+        viewer.draw();
       });
 
       // Initial draw
