@@ -475,15 +475,27 @@ function measureSegment(segment, defaultSize, viewport) {
   let font = segment.style.font || "sans-serif";
   let weight = segment.style.bold ? "bold " : "";
   let italic = segment.style.italic ? "italic " : "";
-  let ctx = measureSegment.ctx || (measureSegment.ctx = document.createElement("canvas").getContext("2d"));
+  // Create a cache key based on text and style parameters.
+  let key = segment.text + "|" + font + "|" + weight + "|" + italic + "|" + size;
+  if (!measureSegment.cache) {
+    measureSegment.cache = {};
+    measureSegment.ctx = document.createElement("canvas").getContext("2d");
+  }
+  if (measureSegment.cache[key] !== undefined) {
+    return measureSegment.cache[key];
+  }
+  let ctx = measureSegment.ctx;
   ctx.font = italic + weight + size + "px " + font;
   let measured = ctx.measureText(segment.text).width;
+  // Add tracking if applicable
   if (segment.style.tracking) {
     measured += segment.text.length > 0 ? segment.style.tracking * (segment.text.length - 1) : 0;
   }
-  if (segment.style.widthScale) {
+  // Apply widthScale if not 1
+  if (segment.style.widthScale && segment.style.widthScale !== 1) {
     measured *= segment.style.widthScale;
   }
+  measureSegment.cache[key] = measured;
   return measured;
 }
       function wrapMTEXTSegments(segments, maxWidth, defaultSize, viewport) {
@@ -1329,6 +1341,7 @@ function measureSegment(segment, defaultSize, viewport) {
             ctx.save();
             ctx.translate(offsetX, i * lineHeight);
             let xPos = 0;
+// Inside DXFMTEXT.draw, in the loop over each segment:
 line.forEach(seg => {
   ctx.save();
   let segSize = defaultSize * (seg.style.scale || 1) * viewport.viewScale;
@@ -1338,44 +1351,51 @@ line.forEach(seg => {
   ctx.font = segItalic + segWeight + segSize + "px " + segFont;
   ctx.fillStyle = seg.style.color || defaultColor;
   ctx.textBaseline = "alphabetic";
+  
   let tracking = seg.style.tracking || 0;
   let widthScale = seg.style.widthScale || 1;
   let oblique = seg.style.oblique || 0;
-  // If an oblique angle is set, apply a horizontal skew:
+  
+  // If an oblique angle is set, apply horizontal skew
   if (oblique !== 0) {
     let tanOblique = Math.tan(oblique * Math.PI / 180);
     ctx.transform(1, 0, tanOblique, 1, 0, 0);
   }
-  // Draw the text; if tracking or widthScale is in effect, do character‐by‐character:
-  if (tracking !== 0 || widthScale !== 1 || oblique !== 0) {
+  
+  // If no special per‑character adjustments are needed, render the entire segment at once.
+  let measuredWidth = measureSegment(seg, defaultSize, viewport);
+  if (tracking === 0 && widthScale === 1 && oblique === 0) {
+    ctx.fillText(seg.text, xPos, 0);
+    xPos += measuredWidth;
+  } else {
+    // Otherwise, fall back to per‑character rendering.
     for (let j = 0; j < seg.text.length; j++) {
       let ch = seg.text[j];
       ctx.fillText(ch, xPos, 0);
       let charWidth = ctx.measureText(ch).width;
       xPos += (charWidth + tracking) * widthScale;
     }
-  } else {
-    ctx.fillText(seg.text, xPos, 0);
-    xPos += ctx.measureText(seg.text).width;
   }
-  // (Underline/overline drawing remains essentially the same.)
+  
+  // Draw underline using cached measurement rather than re‑measuring.
   if (seg.style.underline) {
     let metrics = ctx.measureText(seg.text);
     let underlineY = (metrics.actualBoundingBoxDescent !== undefined)
       ? metrics.actualBoundingBoxDescent + 2 : segSize * 0.3;
     ctx.beginPath();
-    ctx.moveTo(xPos - ctx.measureText(seg.text).width, underlineY);
+    ctx.moveTo(xPos - measuredWidth, underlineY);
     ctx.lineTo(xPos, underlineY);
     ctx.lineWidth = Math.max(1, segSize / 15);
     ctx.strokeStyle = ctx.fillStyle;
     ctx.stroke();
   }
+  // Similar for overline...
   if (seg.style.overline) {
     let metrics = ctx.measureText(seg.text);
     let overlineY = -(metrics.actualBoundingBoxAscent !== undefined
       ? metrics.actualBoundingBoxAscent : segSize * 0.3);
     ctx.beginPath();
-    ctx.moveTo(xPos - ctx.measureText(seg.text).width, overlineY);
+    ctx.moveTo(xPos - measuredWidth, overlineY);
     ctx.lineTo(xPos, overlineY);
     ctx.lineWidth = Math.max(1, segSize / 15);
     ctx.strokeStyle = ctx.fillStyle;
@@ -1383,6 +1403,7 @@ line.forEach(seg => {
   }
   ctx.restore();
 });
+
             ctx.restore();
           }
           ctx.restore();
