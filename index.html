@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Advanced Web DXF Viewer with Comprehensive MTEXT Support</title>
+  <title>Advanced Web DXF Viewer with Color & Line Weight/Thickness</title>
   <style>
     /* Basic full–screen canvas and toolbar styling */
     body {
@@ -214,9 +214,46 @@
       const dy = p2.y - p1.y;
       return Math.sqrt(dx * dx + dy * dy);
     }
-
     function getCenter(p1, p2) {
       return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+    }
+
+    /* =========================================================================
+       Helper Functions for Color & Line Weight / Thickness
+       ========================================================================= */
+    // Returns a CSS color string based on DXF color info.
+    // Group code 420 (true color) is preferred; otherwise, group code 62 (AutoCAD Color Index) is used.
+    function getEntityColor(entity) {
+      if (entity["420"]) {
+        let tc = parseInt(entity["420"]);
+        let hex = tc.toString(16).padStart(6, "0");
+        return "#" + hex;
+      }
+      if (entity["62"]) {
+        let aci = parseInt(entity["62"]);
+        // A simple mapping for common AutoCAD Color Index values.
+        let aciColors = {
+          1: "#ff0000", 2: "#ffff00", 3: "#00ff00",
+          4: "#00ffff", 5: "#0000ff", 6: "#ff00ff",
+          7: "#ffffff", 8: "#808080", 9: "#c0c0c0"
+        };
+        return aciColors[aci] || "#000000";
+      }
+      return "#000000";
+    }
+
+    // Returns a line width (in device pixels) based on DXF thickness (group code 39)
+    // or line weight (group code 370). The value is adjusted to keep a constant screen size.
+    function getLineWidth(entity) {
+      if (entity["39"] && parseFloat(entity["39"]) !== 0) {
+        let thickness = parseFloat(entity["39"]); // drawing units (often mm)
+        // Convert drawing units to pixels (assume 1 mm ≈ 3.78 px) and adjust for constant size:
+        return Math.max(1, thickness * 3.78) / viewScale;
+      } else if (entity["370"]) {
+        let lw_mm = parseInt(entity["370"]) / 100; // line weight in mm
+        return Math.max(1, lw_mm * 3.78) / viewScale;
+      }
+      return 1 / viewScale;
     }
 
     /* =========================================================================
@@ -570,9 +607,11 @@
         return;
       }
       ctx.save();
-      ctx.lineWidth = 1 / viewScale;
-      ctx.strokeStyle = "#000";
-      ctx.fillStyle = "#000";
+      // Apply color and line width based on DXF properties
+      ctx.lineWidth = getLineWidth(entity);
+      const color = getEntityColor(entity);
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
       switch (entity.type) {
         case "LINE":
           {
@@ -643,7 +682,7 @@
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.translate(screen.x, screen.y);
       ctx.rotate(-rotation);
-      ctx.fillStyle = "#000";
+      ctx.fillStyle = getEntityColor(entity);
       ctx.font = `${screenFontSize}px ${entity["7"] || "sans-serif"}`;
       ctx.textBaseline = "middle";
       ctx.fillText(text, 0, 0);
@@ -653,16 +692,15 @@
     /* =========================================================================
        Comprehensive MTEXT Parsing & Rendering
        =========================================================================
-       The following functions parse the raw MTEXT string (which may include
-       nested groups such as {\H1.5x;...} and inline control codes like \P for
-       paragraph breaks, \L/\l for underline toggling, etc.). They return an
-       array of segments (or tokens) each carrying a style object.
+       This section parses the rich text (MTEXT) string (supporting nested groups,
+       inline control codes, and common escape sequences) and then performs word
+       wrapping (if a text box width is defined) and alignment.
     */
-    function parseMTEXTContent(rawText, defaultSize, defaultFont) {
+    function parseMTEXTContent(rawText, defaultSize, defaultFont, defaultColor) {
       // Replace common DXF escape sequences (e.g. "%%d" for degree)
       rawText = rawText.replace(/%%d/g, "°");
       rawText = rawText.replace(/%%c/g, "Ø");
-      let defaultStyle = { scale: 1, font: defaultFont, underline: false, bold: false, italic: false, color: "#000" };
+      let defaultStyle = { scale: 1, font: defaultFont, underline: false, bold: false, italic: false, color: defaultColor };
       let result = parseFormattedText(rawText, 0, defaultStyle);
       return result.segments;
     }
@@ -807,7 +845,9 @@
       const rotation = entity["50"] ? degToRad(parseFloat(entity["50"])) : 0;
       const rawText = entity["1"] || "";
       const defaultFont = entity["7"] || "sans-serif";
-      let parsedSegments = parseMTEXTContent(rawText, defaultSize, defaultFont);
+      // Use the entity’s color (if defined) as the default text color.
+      const defaultColor = getEntityColor(entity);
+      let parsedSegments = parseMTEXTContent(rawText, defaultSize, defaultFont, defaultColor);
 
       // Split segments into paragraphs (using our special paragraphBreak marker)
       let paragraphs = [];
@@ -885,10 +925,9 @@
           let segWeight = segStyle.bold ? "bold " : "";
           let segItalic = segStyle.italic ? "italic " : "";
           ctx.font = segItalic + segWeight + segSize + "px " + segFont;
-          ctx.fillStyle = segStyle.color || "#000";
+          ctx.fillStyle = segStyle.color || defaultColor;
           ctx.textBaseline = "middle";
           ctx.fillText(seg.text, xPos, 0);
-          // If underline is active, draw a line under the text.
           if (segStyle.underline) {
             let metrics = ctx.measureText(seg.text);
             let underlineY = segSize * 0.6;
@@ -910,7 +949,7 @@
        End Comprehensive MTEXT Functions
        ========================================================================= */
 
-    // Initial draw
+    // Initial draw.
     draw();
   </script>
 </body>
