@@ -15,7 +15,7 @@
         position: absolute;
         top: 10px;
         left: 10px;
-        z-index: 10;
+        z-index: 110; /* above canvas but below the overlay when open */
         background: rgba(255, 255, 255, 0.95);
         padding: 10px;
         border-radius: 4px;
@@ -25,9 +25,19 @@
       #toolbar input {
         margin: 4px 0;
       }
+      /* Overlay for modal popup */
+      #optionsOverlay {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.3);
+        z-index: 200;
+      }
       /* Styling for the rendering options popup */
       #renderOptions {
-        display: none;
         position: absolute;
         top: 50px;
         left: 10px;
@@ -59,6 +69,12 @@
       <div style="margin-top:8px;">
         <button id="toggleRenderOptions">Rendering Options</button>
       </div>
+      <div style="margin-top:8px;">
+        <small>Pan with mouse/touch; wheel or pinch to zoom.</small>
+      </div>
+    </div>
+    <!-- The overlay that contains the rendering options popup -->
+    <div id="optionsOverlay">
       <div id="renderOptions">
         <div><strong>Entity Types</strong></div>
         <label>
@@ -113,9 +129,6 @@
         <label>
           <input type="checkbox" id="toggleWidth" /> Disable Width Rendering
         </label><br />
-      </div>
-      <div style="margin-top:8px;">
-        <small>Pan with mouse/touch; wheel or pinch to zoom.</small>
       </div>
     </div>
     <canvas id="canvas"></canvas>
@@ -353,7 +366,8 @@
           return DXFStyle.ACI_COLORS[7] || "#FFFFFF";
         }
         static getEntityColor(entity, dxfDoc) {
-          if (!renderSettings.renderColor) return "#000000";
+          // When color rendering is disabled, return the default DXF color (ACI 7)
+          if (!renderSettings.renderColor) return DXFStyle.ACI_COLORS[7] || "#FFFFFF";
           if (entity.raw["420"]) {
             let tc = parseInt(entity.raw["420"]);
             let hex = tc.toString(16).padStart(6, "0");
@@ -1964,10 +1978,23 @@
         viewer.toggleGrid();
       });
 
-      // Toggle the rendering options popup
+      // Toggle the rendering options modal overlay
+      const optionsOverlay = document.getElementById("optionsOverlay");
+      const renderOptions = document.getElementById("renderOptions");
+
       document.getElementById("toggleRenderOptions").addEventListener("click", function () {
-        const optionsDiv = document.getElementById("renderOptions");
-        optionsDiv.style.display = optionsDiv.style.display === "none" ? "block" : "none";
+        optionsOverlay.style.display = "block";
+      });
+
+      // When clicking on the overlay (but not the popup), dismiss the options.
+      optionsOverlay.addEventListener("click", function (e) {
+        if (e.target === optionsOverlay) {
+          optionsOverlay.style.display = "none";
+        }
+      });
+      // Prevent clicks inside the popup from propagating to the overlay.
+      renderOptions.addEventListener("click", function (e) {
+        e.stopPropagation();
       });
 
       // Listen for changes to entity type checkboxes.
