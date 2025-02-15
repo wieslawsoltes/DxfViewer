@@ -58,7 +58,7 @@
         <input type="file" id="dxfFile" accept=".dxf" />
       </div>
       <div>
-        <button id="resetView">Reset View</button>
+        <button id="zoomExtents">Zoom Extents</button>
         <button id="toggleGrid">Toggle Grid</button>
       </div>
       <div style="margin-top:8px;">
@@ -2194,6 +2194,10 @@ line.forEach(seg => {
           this.viewport.reset();
           this.draw();
         }
+        zoomExtents() {
+          this.viewport.setInitialView(this.dxfDoc);
+          this.draw();
+        }
         draw() {
           let ctx = this.ctx;
           ctx.save();
@@ -2338,7 +2342,7 @@ line.forEach(seg => {
         };
         reader.readAsText(file);
       });
-      document.getElementById("resetView").addEventListener("click", () => viewer.resetView());
+      document.getElementById("zoomExtents").addEventListener("click", () => viewer.zoomExtents());
       document.getElementById("toggleGrid").addEventListener("click", () => viewer.toggleGrid());
       document.getElementById("toggleEntityOptions").addEventListener("click", () => {
         document.getElementById("entityOptionsOverlay").style.display = "block";
