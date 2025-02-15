@@ -55,7 +55,8 @@
     let dxf = { entities: [], blocks: {}, layers: {}, linetypes: {} };
     let baseScale = 1, baseOffsetX = 0, baseOffsetY = 0;
     let viewScale = 1, viewOffsetX = 0, viewOffsetY = 0;
-    let gridEnabled = true;
+    // Grid is now off initially
+    let gridEnabled = false;
     let isPanning = false;
     let lastPanPoint = { x: 0, y: 0 };
     // Touch state
@@ -477,15 +478,12 @@
               continue;
             }
           } else {
-            // Also capture additional hatch properties like:
-            // 70: solid fill flag, 2: pattern name, 52: pattern angle, 41: hatch spacing, 51: pattern offset.
             entity[code] = value;
             i += 2;
           }
         }
         return { entity: entity, nextIndex: i };
       } else if (entity.type === "DIMENSION") {
-        // Simply collect all group codes; our draw function will interpret common ones.
         while (i < lines.length) {
           code = lines[i].trim();
           if (code === "0") break;
@@ -505,7 +503,6 @@
         }
         return { entity: entity, nextIndex: i };
       } else {
-        // For other entities, read until next "0".
         while (i < lines.length) {
           code = lines[i].trim();
           if (code === "0") break;
@@ -597,7 +594,6 @@
     /* =========================================================================
        Helper Functions for Hatch Patterns
     ========================================================================= */
-    // Compute a bounding box from a boundary (single loop or multiple loops)
     function computeBBox(boundary) {
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       if (Array.isArray(boundary[0])) {
@@ -619,7 +615,6 @@
       }
       return { minX, minY, maxX, maxY };
     }
-    // Rotate a point by a given angle (in radians)
     function rotatePoint(x, y, angle) {
       return {
         x: x * Math.cos(angle) - y * Math.sin(angle),
@@ -627,6 +622,23 @@
       };
     }
     function degToRad(deg) { return (deg * Math.PI)/180; }
+
+    /* =========================================================================
+       Adaptive Grid Functions
+    ========================================================================= */
+    // Computes a "nice" grid spacing (in world units) so that grid lines are roughly ~50px apart.
+    function getNiceGridSpacing() {
+      const desiredSpacingScreen = 50; // pixels
+      let spacingWorld = desiredSpacingScreen / viewScale;
+      let exponent = Math.floor(Math.log10(spacingWorld));
+      let fraction = spacingWorld / Math.pow(10, exponent);
+      let niceFraction;
+      if (fraction < 1.5) niceFraction = 1;
+      else if (fraction < 3) niceFraction = 2;
+      else if (fraction < 7) niceFraction = 5;
+      else niceFraction = 10;
+      return niceFraction * Math.pow(10, exponent);
+    }
 
     /* =========================================================================
        Drawing Functions
@@ -647,22 +659,22 @@
     }
 
     function drawGrid() {
-      const gridSpacing = 10;
+      let gridSpacing = getNiceGridSpacing();
       let topLeft = screenToWorld(0,0);
       let bottomRight = screenToWorld(canvas.width, canvas.height);
-      let startX = Math.floor(topLeft.x/gridSpacing)*gridSpacing;
-      let endX = Math.ceil(bottomRight.x/gridSpacing)*gridSpacing;
-      let startY = Math.floor(bottomRight.y/gridSpacing)*gridSpacing;
-      let endY = Math.ceil(topLeft.y/gridSpacing)*gridSpacing;
+      let startX = Math.floor(topLeft.x / gridSpacing) * gridSpacing;
+      let endX = Math.ceil(bottomRight.x / gridSpacing) * gridSpacing;
+      let startY = Math.floor(bottomRight.y / gridSpacing) * gridSpacing;
+      let endY = Math.ceil(topLeft.y / gridSpacing) * gridSpacing;
       ctx.save();
-      ctx.lineWidth = 0.5 / viewScale;
-      ctx.strokeStyle = "#ddd";
+      ctx.lineWidth = 1 / viewScale;
+      ctx.strokeStyle = "#444444";
       ctx.beginPath();
-      for(let x = startX; x <= endX; x += gridSpacing) {
+      for (let x = startX; x <= endX; x += gridSpacing) {
         ctx.moveTo(x, startY);
         ctx.lineTo(x, endY);
       }
-      for(let y = startY; y <= endY; y += gridSpacing) {
+      for (let y = startY; y <= endY; y += gridSpacing) {
         ctx.moveTo(startX, y);
         ctx.lineTo(endX, y);
       }
@@ -670,21 +682,19 @@
       ctx.restore();
     }
     function screenToWorld(sx, sy) {
-      return { x: (sx - viewOffsetX)/viewScale, y: -(sy - viewOffsetY)/viewScale };
+      return { x: (sx - viewOffsetX) / viewScale, y: -(sy - viewOffsetY) / viewScale };
     }
     function worldToScreen(x, y) {
-      return { x: viewScale*x + viewOffsetX, y: -viewScale*y + viewOffsetY };
+      return { x: viewScale * x + viewOffsetX, y: -viewScale * y + viewOffsetY };
     }
 
     /* =========================================================================
        Color, Line Weight & Linetype Helpers
     ========================================================================= */
-    // Modified: return white (ACI 7) as default if an invalid color is found.
     function getACIColor(aci) {
       if (ACI_COLORS.hasOwnProperty(aci)) return ACI_COLORS[aci];
       return ACI_COLORS[7] || "#FFFFFF";
     }
-    // Modified: If no valid color is set, try layer color or default to white.
     function getEntityColor(entity) {
       if (entity["420"]) {
         let tc = parseInt(entity["420"]);
@@ -768,8 +778,8 @@
                 x2 = parseFloat(entity["11"]),
                 y2 = parseFloat(entity["21"]);
             ctx.beginPath();
-            ctx.moveTo(x1,y1);
-            ctx.lineTo(x2,y2);
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
             ctx.stroke();
           }
           break;
@@ -779,7 +789,7 @@
                 cy = parseFloat(entity["20"]),
                 r = parseFloat(entity["40"]);
             ctx.beginPath();
-            ctx.arc(cx,cy,r,0,2*Math.PI);
+            ctx.arc(cx, cy, r, 0, 2 * Math.PI);
             ctx.stroke();
           }
           break;
@@ -791,7 +801,7 @@
             let startAngle = degToRad(parseFloat(entity["50"] || "0")),
                 endAngle = degToRad(parseFloat(entity["51"] || "0"));
             ctx.beginPath();
-            ctx.arc(cx,cy,r,startAngle,endAngle);
+            ctx.arc(cx, cy, r, startAngle, endAngle);
             ctx.stroke();
           }
           break;
@@ -818,7 +828,7 @@
           height = entity["40"] ? parseFloat(entity["40"]) : 12,
           rotation = entity["50"] ? degToRad(parseFloat(entity["50"])) : 0,
           text = entity["1"] || "";
-      let screen = worldToScreen(x,y),
+      let screen = worldToScreen(x, y),
           screenFontSize = height * viewScale;
       ctx.save();
       ctx.setTransform(1,0,0,1,0,0);
@@ -826,60 +836,42 @@
       ctx.rotate(-rotation);
       ctx.fillStyle = getEntityColor(entity);
       ctx.font = `${screenFontSize}px ${entity["7"] || "sans-serif"}`;
-      ctx.textBaseline = "middle";
+      ctx.textBaseline = "alphabetic";
       ctx.fillText(text, 0, 0);
       ctx.restore();
     }
 
     /* =========================================================================
        Dimension Rendering
-       (A basic linear dimension support with improved text orientation)
     ========================================================================= */
     function drawDimension(entity) {
-      // Expect group codes:
-      // 10/20: first measured point; 11/21: second measured point;
-      // 1: dimension text (optional)
       let p1 = { x: parseFloat(entity["10"]), y: parseFloat(entity["20"]) };
       let p2 = { x: parseFloat(entity["11"]), y: parseFloat(entity["21"]) };
       let dimText = entity["1"] || "";
-
-      // Compute vector along measured line.
       let dx = p2.x - p1.x, dy = p2.y - p1.y;
       let len = Math.sqrt(dx * dx + dy * dy);
       if (len === 0) return;
       let ux = dx / len, uy = dy / len;
-
-      // Perpendicular vector.
       let vx = -uy, vy = ux;
-
-      // Offset for extension lines.
       let offset = 5;
       let p1_ext = { x: p1.x + vx * offset, y: p1.y + vy * offset };
       let p2_ext = { x: p2.x + vx * offset, y: p2.y + vy * offset };
-
       let color = getEntityColor(entity);
       let lw = getLineWidth(entity);
-
       ctx.save();
       ctx.strokeStyle = color;
       ctx.fillStyle = color;
       ctx.lineWidth = lw;
-
-      // Draw extension lines.
       ctx.beginPath();
       ctx.moveTo(p1.x, p1.y);
       ctx.lineTo(p1_ext.x, p1_ext.y);
       ctx.moveTo(p2.x, p2.y);
       ctx.lineTo(p2_ext.x, p2_ext.y);
       ctx.stroke();
-
-      // Draw the dimension line.
       ctx.beginPath();
       ctx.moveTo(p1_ext.x, p1_ext.y);
       ctx.lineTo(p2_ext.x, p2_ext.y);
       ctx.stroke();
-
-      // Draw arrowheads.
       let arrowSize = 3;
       function drawArrow(pt, dir) {
         let halfWidth = arrowSize / 2;
@@ -895,23 +887,17 @@
       }
       drawArrow(p1_ext, { x: ux, y: uy });
       drawArrow(p2_ext, { x: -ux, y: -uy });
-
-      // Compute midpoint for the dimension text.
       let mid = { x: (p1_ext.x + p2_ext.x) / 2, y: (p1_ext.y + p2_ext.y) / 2 };
-
-      // Calculate the angle of the measured line.
       let angle = Math.atan2(uy, ux);
-      // Adjust angle to keep text readable.
       if (angle > Math.PI / 2 || angle < -Math.PI / 2) {
         angle += Math.PI;
       }
-
       ctx.save();
       ctx.translate(mid.x, mid.y);
       ctx.rotate(angle);
       ctx.font = `12px sans-serif`;
       ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
+      ctx.textBaseline = "alphabetic";
       ctx.fillText(dimText, 0, -offset - 2);
       ctx.restore();
       ctx.restore();
@@ -919,12 +905,9 @@
 
     /* =========================================================================
        Hatch Rendering
-       (Enhanced to support both solid and pattern fills with correct size)
     ========================================================================= */
     function drawHatch(entity) {
       if (!entity.boundary || entity.boundary.length === 0) return;
-      
-      // Determine whether to use solid fill or pattern fill.
       let isSolid = false;
       if (entity["70"] !== undefined) {
         isSolid = (parseInt(entity["70"]) & 1) !== 0;
@@ -935,9 +918,7 @@
           isSolid = true;
         }
       }
-      
       if (isSolid) {
-        // Solid fill: create a path from the boundary and fill it.
         ctx.save();
         let fillColor = getEntityColor(entity) || "#cccccc";
         ctx.fillStyle = fillColor;
@@ -965,9 +946,7 @@
         ctx.stroke();
         ctx.restore();
       } else {
-        // Pattern fill: use hatch parameters to draw parallel lines inside the hatch.
         ctx.save();
-        // Create a clipping path from the hatch boundary.
         ctx.beginPath();
         if (Array.isArray(entity.boundary[0])) {
           entity.boundary.forEach(loop => {
@@ -987,15 +966,9 @@
           ctx.closePath();
         }
         ctx.clip();
-        
-        // Get hatch pattern parameters.
         let patternAngle = degToRad(parseFloat(entity["52"]) || 0);
-        let spacing = parseFloat(entity["41"]) || 10; // default spacing
-        
-        // Compute bounding box for the hatch boundary.
+        let spacing = parseFloat(entity["41"]) || 10;
         let bbox = computeBBox(entity.boundary);
-        
-        // Compute rotated bounding box corners.
         let corners = [
           { x: bbox.minX, y: bbox.minY },
           { x: bbox.maxX, y: bbox.minY },
@@ -1009,8 +982,6 @@
         let maxXRot = Math.max(...rotatedXs);
         let minYRot = Math.min(...rotatedYs);
         let maxYRot = Math.max(...rotatedYs);
-        
-        // Draw hatch lines in the rotated coordinate system.
         ctx.save();
         ctx.rotate(-patternAngle);
         ctx.beginPath();
@@ -1030,7 +1001,6 @@
        MTEXT Parsing & Rendering – Improved Formatting & Layout
     ========================================================================= */
     function parseMTEXTContent(rawText, defaultSize, defaultFont, defaultColor) {
-      // Replace common DXF escape sequences.
       rawText = rawText.replace(/%%d/g, "°").replace(/%%c/g, "Ø");
       let defaultStyle = { scale: 1, font: defaultFont, underline: false, bold: false, italic: false, color: defaultColor };
       let result = parseFormattedText(rawText, 0, defaultStyle);
@@ -1127,26 +1097,21 @@
           defaultFont = entity["7"] || "sans-serif",
           defaultColor = getEntityColor(entity);
       let parsedSegments = parseMTEXTContent(rawText, defaultSize, defaultFont, defaultColor);
-      // Split segments into paragraphs
       let paragraphs = [], currentParagraph = [];
       parsedSegments.forEach(seg => { 
         if (seg.paragraphBreak) { paragraphs.push(currentParagraph); currentParagraph = []; }
         else { currentParagraph.push(seg); }
       });
       if (currentParagraph.length > 0) paragraphs.push(currentParagraph);
-      // Wrap lines if a wrap width is provided (group code 41)
       let maxWidth = parseFloat(entity["41"]) || 0;
       let wrappedLines = [];
       if (maxWidth > 0) {
-         // Convert wrap width from drawing units to screen units.
          let maxWidthScreen = maxWidth * viewScale;
          paragraphs.forEach(para => { 
            let lines = wrapMTEXTSegments(para, maxWidthScreen, defaultSize);
            wrappedLines.push(...lines);
          });
       } else { wrappedLines = paragraphs; }
-      
-      // Alignment: group code 71 defines the attachment point.
       let align = parseInt(entity["71"]) || 1;
       let hAlign = align % 3, vAlign = Math.floor((align-1)/3);
       let lineHeight = defaultSize * viewScale * 1.2;
@@ -1157,21 +1122,19 @@
          lineWidths.push(width);
          if (width > maxLineWidth) maxLineWidth = width;
       });
-      // Calculate vertical offset based on vertical alignment.
       let offsetY = (vAlign === 1) ? -totalHeight/2 : (vAlign === 2 ? -totalHeight : 0);
-      
       ctx.save();
       ctx.setTransform(1,0,0,1,0,0);
-      let screenPos = worldToScreen(x,y);
+      let screenPos = worldToScreen(x, y);
       ctx.translate(screenPos.x, screenPos.y);
       ctx.rotate(-rotation);
       ctx.translate(0, offsetY);
-      for (let i=0; i<wrappedLines.length; i++) {
+      for (let i = 0; i < wrappedLines.length; i++) {
          let line = wrappedLines[i],
              lineWidth = lineWidths[i],
              offsetX = (hAlign === 2) ? (maxLineWidth - lineWidth)/2 : (hAlign === 0 ? (maxLineWidth - lineWidth) : 0);
          ctx.save();
-         ctx.translate(offsetX, i*lineHeight);
+         ctx.translate(offsetX, i * lineHeight);
          let xPos = 0;
          line.forEach(seg => {
            let segStyle = seg.style,
@@ -1181,15 +1144,17 @@
                segItalic = segStyle.italic ? "italic " : "";
            ctx.font = segItalic + segWeight + segSize + "px " + segFont;
            ctx.fillStyle = segStyle.color || defaultColor;
-           ctx.textBaseline = "middle";
+           // Use 'alphabetic' baseline so we can accurately position underlines.
+           ctx.textBaseline = "alphabetic";
            ctx.fillText(seg.text, xPos, 0);
            if (segStyle.underline) {
-             let metrics = ctx.measureText(seg.text),
-                 underlineY = segSize * 0.6;
+             let metrics = ctx.measureText(seg.text);
+             // Use actualBoundingBoxDescent if available; otherwise, use a fallback.
+             let underlineY = (metrics.actualBoundingBoxDescent !== undefined) ? metrics.actualBoundingBoxDescent + 2 : segSize * 0.3;
              ctx.beginPath();
              ctx.moveTo(xPos, underlineY);
-             ctx.lineTo(xPos+metrics.width, underlineY);
-             ctx.lineWidth = Math.max(1, segSize/15);
+             ctx.lineTo(xPos + metrics.width, underlineY);
+             ctx.lineWidth = Math.max(1, segSize / 15);
              ctx.strokeStyle = ctx.fillStyle;
              ctx.stroke();
            }
