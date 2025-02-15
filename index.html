@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Advanced Web DXF Viewer – Dimensions, Hatch & MTEXT</title>
+  <title>Advanced Web DXF Viewer – Dimensions, Hatch, MTEXT & SPLINE</title>
   <style>
     /* Fullscreen canvas and toolbar styling */
     body {
@@ -339,7 +339,7 @@
                     code = lines[i].trim();
                     value = lines[i+1] ? lines[i+1].trim() : "";
                     if (code === "0" && (value === "ENDBLK" ||
-                        ["LINE", "CIRCLE", "ARC", "LWPOLYLINE", "POLYLINE", "TEXT", "MTEXT", "DIMENSION", "HATCH"].includes(value))) break;
+                        ["LINE", "CIRCLE", "ARC", "LWPOLYLINE", "POLYLINE", "TEXT", "MTEXT", "DIMENSION", "HATCH", "SPLINE"].includes(value))) break;
                     if (code === "2") block.name = value;
                     else if (code === "10") block.basePoint.x = parseFloat(value);
                     else if (code === "20") block.basePoint.y = parseFloat(value);
@@ -405,7 +405,7 @@
     }
 
     /* =========================================================================
-       parseEntity – Extended to support DIMENSION, HATCH, and MTEXT
+       parseEntity – Extended to support DIMENSION, HATCH, MTEXT, and SPLINE
     ========================================================================= */
     function parseEntity(lines, i) {
       if (i >= lines.length) return null;
@@ -502,6 +502,64 @@
           i += 2;
         }
         return { entity: entity, nextIndex: i };
+      } else if (entity.type === "SPLINE") {
+        // New: parse SPLINE entity.
+        // According to DXF, common group codes:
+        //   70: flags, 71: degree, 72: number of knots,
+        //   73: number of control points, 74: number of fit points,
+        //   40: knot values,
+        //   10: control point X (with 20 for Y),
+        //   11: fit point X (with 21 for Y).
+        entity.degree = null;
+        entity.knots = [];
+        entity.controlPoints = [];
+        entity.fitPoints = [];
+        while (i < lines.length) {
+          code = lines[i].trim();
+          if (code === "0") break;
+          value = lines[i+1] ? lines[i+1].trim() : "";
+          if (code === "70") {
+            entity.flags = parseInt(value);
+          } else if (code === "71") {
+            entity.degree = parseInt(value);
+          } else if (code === "72") {
+            entity.numKnots = parseInt(value);
+          } else if (code === "73") {
+            entity.numControlPoints = parseInt(value);
+          } else if (code === "74") {
+            entity.numFitPoints = parseInt(value);
+          } else if (code === "40") {
+            entity.knots.push(parseFloat(value));
+          } else if (code === "10") {
+            // Assume control point: read X then Y.
+            let pt = { x: parseFloat(value) };
+            i += 2;
+            if (i < lines.length && lines[i].trim() === "20") {
+              pt.y = parseFloat(lines[i+1].trim());
+            } else {
+              pt.y = 0;
+              i -= 2;
+            }
+            entity.controlPoints.push(pt);
+            continue;
+          } else if (code === "11") {
+            // Fit point.
+            let pt = { x: parseFloat(value) };
+            i += 2;
+            if (i < lines.length && lines[i].trim() === "21") {
+              pt.y = parseFloat(lines[i+1].trim());
+            } else {
+              pt.y = 0;
+              i -= 2;
+            }
+            entity.fitPoints.push(pt);
+            continue;
+          } else {
+            entity[code] = value;
+          }
+          i += 2;
+        }
+        return { entity: entity, nextIndex: i };
       } else {
         while (i < lines.length) {
           code = lines[i].trim();
@@ -567,6 +625,13 @@
             break;
           case "INSERT":
             considerPoint(parseFloat(entity["10"]), parseFloat(entity["20"]));
+            break;
+          case "SPLINE":
+            if (entity.fitPoints && entity.fitPoints.length > 0) {
+              entity.fitPoints.forEach(pt => considerPoint(pt.x, pt.y));
+            } else if (entity.controlPoints && entity.controlPoints.length > 0) {
+              entity.controlPoints.forEach(pt => considerPoint(pt.x, pt.y));
+            }
             break;
         }
       }
@@ -742,6 +807,7 @@
       if (entity.type === "MTEXT") { drawMTEXT(entity); return; }
       if (entity.type === "DIMENSION") { drawDimension(entity); return; }
       if (entity.type === "HATCH") { drawHatch(entity); return; }
+      if (entity.type === "SPLINE") { drawSpline(entity); return; }
       if (entity.type === "INSERT") {
         ctx.save();
         let blockName = entity["2"];
@@ -998,6 +1064,74 @@
     }
 
     /* =========================================================================
+       SPLINE Rendering
+    ========================================================================= */
+    function drawSpline(entity) {
+      ctx.save();
+      ctx.strokeStyle = getEntityColor(entity);
+      ctx.lineWidth = getLineWidth(entity);
+      let samplePoints = [];
+      // If control points, degree, and knot vector are available, use de Boor evaluation.
+      if (entity.controlPoints && entity.controlPoints.length >= (entity.degree + 1) &&
+          entity.knots && entity.knots.length > 0 && entity.degree !== null) {
+        let k = entity.degree;
+        let cp = entity.controlPoints;
+        let knots = entity.knots;
+        // Parameter range from t_min = knots[k] to t_max = knots[knots.length - k - 1]
+        let t_min = knots[k];
+        let t_max = knots[knots.length - k - 1];
+        let numSamples = 50;
+        for (let i = 0; i <= numSamples; i++) {
+          let t = t_min + (t_max - t_min) * (i / numSamples);
+          let pt = deBoor(k, cp, knots, t);
+          samplePoints.push(pt);
+        }
+      } else if (entity.fitPoints && entity.fitPoints.length >= 2) {
+        // Fall back to using fit points if provided.
+        samplePoints = entity.fitPoints;
+      } else {
+        ctx.restore();
+        return;
+      }
+      ctx.beginPath();
+      ctx.moveTo(samplePoints[0].x, samplePoints[0].y);
+      for (let i = 1; i < samplePoints.length; i++) {
+        ctx.lineTo(samplePoints[i].x, samplePoints[i].y);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // de Boor algorithm for B-spline evaluation (non-rational version)
+    // k: degree, cp: control points array, knots: knot vector, t: parameter value.
+    function deBoor(k, cp, knots, t) {
+      let n = cp.length - 1;
+      // Find index i such that knots[i] <= t < knots[i+1]
+      let i = k;
+      for (; i <= n; i++) {
+        if (t < knots[i+1]) {
+          break;
+        }
+      }
+      if (i > n) i = n;
+      // Copy relevant control points.
+      let d = [];
+      for (let j = 0; j <= k; j++) {
+        d[j] = { x: cp[i - k + j].x, y: cp[i - k + j].y };
+      }
+      for (let r = 1; r <= k; r++) {
+        for (let j = k; j >= r; j--) {
+          let index = i - k + j;
+          let denominator = knots[index + k - r + 1] - knots[index];
+          let alpha = (denominator === 0) ? 0 : (t - knots[index]) / denominator;
+          d[j].x = (1 - alpha) * d[j - 1].x + alpha * d[j].x;
+          d[j].y = (1 - alpha) * d[j - 1].y + alpha * d[j].y;
+        }
+      }
+      return d[k];
+    }
+
+    /* =========================================================================
        MTEXT Parsing & Rendering – Improved Formatting & Layout
     ========================================================================= */
     function parseMTEXTContent(rawText, defaultSize, defaultFont, defaultColor) {
@@ -1144,12 +1278,10 @@
                segItalic = segStyle.italic ? "italic " : "";
            ctx.font = segItalic + segWeight + segSize + "px " + segFont;
            ctx.fillStyle = segStyle.color || defaultColor;
-           // Use 'alphabetic' baseline so we can accurately position underlines.
            ctx.textBaseline = "alphabetic";
            ctx.fillText(seg.text, xPos, 0);
            if (segStyle.underline) {
              let metrics = ctx.measureText(seg.text);
-             // Use actualBoundingBoxDescent if available; otherwise, use a fallback.
              let underlineY = (metrics.actualBoundingBoxDescent !== undefined) ? metrics.actualBoundingBoxDescent + 2 : segSize * 0.3;
              ctx.beginPath();
              ctx.moveTo(xPos, underlineY);
