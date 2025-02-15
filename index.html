@@ -2,16 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Advanced Web DXF Viewer – Full Line Type & Color (ByLayer) Support</title>
+  <title>Advanced Web DXF Viewer – Dimensions & Hatches</title>
   <style>
-    /* Basic full–screen canvas and toolbar styling */
+    /* Fullscreen canvas and toolbar styling */
     body {
       margin: 0;
       overflow: hidden;
       font-family: sans-serif;
       user-select: none;
-      -webkit-user-select: none;
-      -ms-user-select: none;
     }
     #toolbar {
       position: absolute;
@@ -53,34 +51,31 @@
     ========================================================================= */
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
-    // The dxf object will contain entities, blocks, layers, and linetypes.
+    // dxf now holds entities, blocks, layers, and linetypes.
     let dxf = { entities: [], blocks: {}, layers: {}, linetypes: {} };
     let baseScale = 1, baseOffsetX = 0, baseOffsetY = 0;
     let viewScale = 1, viewOffsetX = 0, viewOffsetY = 0;
     let gridEnabled = true;
     let isPanning = false;
     let lastPanPoint = { x: 0, y: 0 };
-
-    // Touch state:
+    // Touch state
     let ongoingTouches = [];
     let lastTouchDistance = null;
     let lastTouchCenter = null;
 
     /* =========================================================================
-       ACI Color Mapping (partial – expand as needed)
+       ACI Color Mapping (partial – extend as needed)
     ========================================================================= */
     const ACI_COLORS = {
-      0: "#000000", // 0 usually means BYLAYER/BYBLOCK; here default to black.
-      1: "#FF0000", 2: "#FFFF00", 3: "#00FF00", 4: "#00FFFF",
-      5: "#0000FF", 6: "#FF00FF", 7: "#FFFFFF", 8: "#808080",
-      9: "#C0C0C0", 10: "#FF6600", 11: "#FF9900", 12: "#FFCC00",
-      13: "#CCFF00", 14: "#99FF00", 15: "#66FF00", 16: "#33FF00",
-      17: "#00FF33", 18: "#00FF66", 19: "#00FF99", 20: "#00FFCC",
-      21: "#00FFFF", 22: "#00CCFF", 23: "#0099FF", 24: "#0066FF",
-      25: "#0033FF", 26: "#0000FF", 27: "#3300FF", 28: "#6600FF",
-      29: "#9900FF", 30: "#CC00FF", 31: "#FF00FF", 32: "#FF00CC",
-      33: "#FF0099", 34: "#FF0066", 35: "#FF0033"
-      // ... extend up to 255 as needed.
+      0: "#000000", 1: "#FF0000", 2: "#FFFF00", 3: "#00FF00", 4: "#00FFFF",
+      5: "#0000FF", 6: "#FF00FF", 7: "#FFFFFF", 8: "#808080", 9: "#C0C0C0",
+      10: "#FF6600", 11: "#FF9900", 12: "#FFCC00", 13: "#CCFF00", 14: "#99FF00",
+      15: "#66FF00", 16: "#33FF00", 17: "#00FF33", 18: "#00FF66", 19: "#00FF99",
+      20: "#00FFCC", 21: "#00FFFF", 22: "#00CCFF", 23: "#0099FF", 24: "#0066FF",
+      25: "#0033FF", 26: "#0000FF", 27: "#3300FF", 28: "#6600FF", 29: "#9900FF",
+      30: "#CC00FF", 31: "#FF00FF", 32: "#FF00CC", 33: "#FF0099", 34: "#FF0066",
+      35: "#FF0033"
+      // ... (extend indices as needed)
     };
 
     /* =========================================================================
@@ -167,7 +162,6 @@
     canvas.addEventListener("touchmove", handleTouchMove, {passive: false});
     canvas.addEventListener("touchend", handleTouchEnd, {passive: false});
     canvas.addEventListener("touchcancel", handleTouchEnd, {passive: false});
-
     function getTouchPos(evt) {
       let rect = canvas.getBoundingClientRect();
       return Array.from(evt.touches).map(t => ({
@@ -226,7 +220,9 @@
     }
 
     /* =========================================================================
-       TABLES Parsing – LAYER & LTYPE support
+       TABLES Parsing – (Layers & Linetypes)
+       (See previous examples; not repeated here for brevity.)
+       In our parser, layers are stored in dxf.layers and linetypes in dxf.linetypes.
     ========================================================================= */
     function parseTables(lines, i) {
       let layers = {};
@@ -240,7 +236,6 @@
         }
         if (code === "0" && value === "TABLE") {
           i += 2;
-          // Next should be group code "2" with table name:
           let tableName = lines[i+1] ? lines[i+1].trim() : "";
           i += 2;
           if (tableName === "LAYER") {
@@ -258,15 +253,13 @@
                   code = lines[i].trim();
                   if (code === "0") break;
                   value = lines[i+1] ? lines[i+1].trim() : "";
-                  if (code === "2") { layer.name = value; }
-                  else if (code === "62") { layer["62"] = value; }
-                  else if (code === "6") { layer["6"] = value; }
+                  if (code === "2") layer.name = value;
+                  else if (code === "62") layer["62"] = value;
+                  else if (code === "6") layer["6"] = value;
                   i += 2;
                 }
                 if (layer.name) layers[layer.name] = layer;
-              } else {
-                i += 2;
-              }
+              } else { i += 2; }
             }
           } else if (tableName === "LTYPE") {
             while (i < lines.length) {
@@ -283,11 +276,11 @@
                   code = lines[i].trim();
                   if (code === "0") break;
                   value = lines[i+1] ? lines[i+1].trim() : "";
-                  if (code === "2") { ltype.name = value; }
-                  else if (code === "3") { ltype.description = value; }
-                  else if (code === "72") { ltype.flags = value; }
-                  else if (code === "73") { ltype.elements = parseInt(value); }
-                  else if (code === "40") { ltype.patternLength = parseFloat(value); }
+                  if (code === "2") ltype.name = value;
+                  else if (code === "3") ltype.description = value;
+                  else if (code === "72") ltype.flags = value;
+                  else if (code === "73") ltype.elements = parseInt(value);
+                  else if (code === "40") ltype.patternLength = parseFloat(value);
                   else if (code === "49") {
                     if (!ltype.pattern) ltype.pattern = [];
                     ltype.pattern.push(parseFloat(value));
@@ -295,12 +288,9 @@
                   i += 2;
                 }
                 if (ltype.name) linetypes[ltype.name] = ltype;
-              } else {
-                i += 2;
-              }
+              } else { i += 2; }
             }
           } else {
-            // Skip unknown table types.
             while (i < lines.length) {
               code = lines[i].trim();
               value = lines[i+1] ? lines[i+1].trim() : "";
@@ -311,16 +301,14 @@
               i += 2;
             }
           }
-        } else {
-          i += 2;
-        }
+        } else { i += 2; }
       }
       return { layers: layers, linetypes: linetypes, nextIndex: i };
     }
 
     /* =========================================================================
-       DXF Parsing Function
-       ========================================================================= */
+       DXF Parsing – Main Function
+    ========================================================================= */
     function parseDXF(text) {
       const lines = text.split(/\r\n|\n/);
       let dxf = { entities: [], blocks: {}, layers: {}, linetypes: {} };
@@ -342,21 +330,18 @@
               while (i < lines.length) {
                 code = lines[i].trim();
                 value = lines[i+1] ? lines[i+1].trim() : "";
-                if (code === "0" && value === "ENDSEC") {
-                  i += 2;
-                  break;
-                }
+                if (code === "0" && value === "ENDSEC") { i += 2; break; }
                 if (code === "0" && value === "BLOCK") {
-                  let block = { name: "", basePoint: { x: 0, y: 0 }, entities: [] };
+                  let block = { name:"", basePoint: {x:0,y:0}, entities: [] };
                   i += 2;
                   while (i < lines.length) {
                     code = lines[i].trim();
                     value = lines[i+1] ? lines[i+1].trim() : "";
                     if (code === "0" && (value === "ENDBLK" ||
-                        ["LINE", "CIRCLE", "ARC", "LWPOLYLINE", "POLYLINE", "TEXT", "MTEXT"].includes(value))) break;
-                    if (code === "2") { block.name = value; }
-                    else if (code === "10") { block.basePoint.x = parseFloat(value); }
-                    else if (code === "20") { block.basePoint.y = parseFloat(value); }
+                        ["LINE", "CIRCLE", "ARC", "LWPOLYLINE", "POLYLINE", "TEXT", "MTEXT", "DIMENSION", "HATCH"].includes(value))) break;
+                    if (code === "2") block.name = value;
+                    else if (code === "10") block.basePoint.x = parseFloat(value);
+                    else if (code === "20") block.basePoint.y = parseFloat(value);
                     i += 2;
                   }
                   while (i < lines.length) {
@@ -365,11 +350,7 @@
                     if (code === "0" && value === "ENDBLK") { i += 2; break; }
                     if (code === "0") {
                       let result = parseEntity(lines, i);
-                      if (result) {
-                        block.entities.push(result.entity);
-                        i = result.nextIndex;
-                        continue;
-                      }
+                      if (result) { block.entities.push(result.entity); i = result.nextIndex; continue; }
                     }
                     i += 2;
                   }
@@ -395,11 +376,7 @@
                         let valuePeek = lines[i+1] ? lines[i+1].trim() : "";
                         if (codePeek === "0" && valuePeek === "ATTRIB") {
                           let attribResult = parseEntity(lines, i);
-                          if (attribResult) {
-                            entity.attribs.push(attribResult.entity);
-                            i = attribResult.nextIndex;
-                            continue;
-                          }
+                          if (attribResult) { entity.attribs.push(attribResult.entity); i = attribResult.nextIndex; continue; }
                         }
                         break;
                       }
@@ -411,7 +388,6 @@
                 i += 2;
               }
             } else {
-              // Skip any other section.
               while (i < lines.length) {
                 code = lines[i].trim();
                 value = lines[i+1] ? lines[i+1].trim() : "";
@@ -427,6 +403,9 @@
       return dxf;
     }
 
+    /* =========================================================================
+       parseEntity – Extended to support DIMENSION and HATCH
+    ========================================================================= */
     function parseEntity(lines, i) {
       if (i >= lines.length) return null;
       let code = lines[i].trim();
@@ -459,12 +438,8 @@
             }
             entity.vertices.push(vertex);
             continue;
-          } else if (code === "0" && value === "SEQEND") {
-            i += 2;
-            break;
-          } else {
-            i += 2;
-          }
+          } else if (code === "0" && value === "SEQEND") { i += 2; break; }
+          else { i += 2; }
         }
         return { entity: entity, nextIndex: i };
       } else if (entity.type === "LWPOLYLINE") {
@@ -484,7 +459,40 @@
           else { entity[code] = value; i += 2; }
         }
         return { entity: entity, nextIndex: i };
+      } else if (entity.type === "HATCH") {
+        // For our simplified hatch, we parse additional boundary points.
+        entity.boundary = [];
+        while (i < lines.length) {
+          code = lines[i].trim();
+          if (code === "0") break;
+          value = lines[i+1] ? lines[i+1].trim() : "";
+          if (code === "10") {
+            let x = parseFloat(value);
+            i += 2;
+            if (i < lines.length && lines[i].trim() === "20") {
+              let y = parseFloat(lines[i+1].trim());
+              i += 2;
+              entity.boundary.push({ x: x, y: y });
+              continue;
+            }
+          } else {
+            entity[code] = value;
+            i += 2;
+          }
+        }
+        return { entity: entity, nextIndex: i };
+      } else if (entity.type === "DIMENSION") {
+        // Simply collect all group codes; our draw function will interpret common ones.
+        while (i < lines.length) {
+          code = lines[i].trim();
+          if (code === "0") break;
+          value = lines[i+1] ? lines[i+1].trim() : "";
+          entity[code] = value;
+          i += 2;
+        }
+        return { entity: entity, nextIndex: i };
       } else {
+        // For other entities, read until next "0".
         while (i < lines.length) {
           code = lines[i].trim();
           if (code === "0") break;
@@ -497,11 +505,11 @@
     }
 
     /* =========================================================================
-       Compute Initial View (Bounding Box, Centering, Scaling)
+       Compute Initial View (bounding box, centering, scaling)
     ========================================================================= */
     function setInitialView() {
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      function considerPoint(x, y) {
+      function considerPoint(x,y) {
         if (isNaN(x) || isNaN(y)) return;
         minX = Math.min(minX, x);
         minY = Math.min(minY, y);
@@ -539,7 +547,13 @@
           case "TEXT":
           case "MTEXT":
           case "ATTRIB":
+          case "DIMENSION":
             considerPoint(parseFloat(entity["10"]), parseFloat(entity["20"]));
+            break;
+          case "HATCH":
+            if (entity.boundary && entity.boundary.length > 0) {
+              entity.boundary.forEach(pt => considerPoint(pt.x, pt.y));
+            }
             break;
           case "INSERT":
             considerPoint(parseFloat(entity["10"]), parseFloat(entity["20"]));
@@ -558,8 +572,8 @@
       let scaleX = canvas.width / drawingWidth,
           scaleY = canvas.height / drawingHeight;
       baseScale = 0.9 * Math.min(scaleX, scaleY);
-      let centerX = (minX + maxX)/2,
-          centerY = (minY + maxY)/2;
+      let centerX = (minX+maxX)/2,
+          centerY = (minY+maxY)/2;
       viewScale = baseScale;
       baseOffsetX = canvas.width/2 - baseScale*centerX;
       baseOffsetY = canvas.height/2 + baseScale*centerY;
@@ -576,55 +590,50 @@
       ctx.clearRect(0,0,canvas.width, canvas.height);
       ctx.restore();
 
-      // Set world transform (flip Y to preserve DXF's Y–up)
+      // Set world transform (flip Y to preserve DXF's Y-up)
       ctx.setTransform(viewScale, 0, 0, -viewScale, viewOffsetX, viewOffsetY);
 
       if (gridEnabled) drawGrid();
-
-      dxf.entities.forEach(entity => {
-        drawEntity(entity);
-      });
+      dxf.entities.forEach(entity => { drawEntity(entity); });
     }
 
     function drawGrid() {
       const gridSpacing = 10;
       let topLeft = screenToWorld(0,0);
       let bottomRight = screenToWorld(canvas.width, canvas.height);
-      let startX = Math.floor(topLeft.x / gridSpacing) * gridSpacing;
-      let endX = Math.ceil(bottomRight.x / gridSpacing) * gridSpacing;
-      let startY = Math.floor(bottomRight.y / gridSpacing) * gridSpacing;
-      let endY = Math.ceil(topLeft.y / gridSpacing) * gridSpacing;
+      let startX = Math.floor(topLeft.x/gridSpacing)*gridSpacing;
+      let endX = Math.ceil(bottomRight.x/gridSpacing)*gridSpacing;
+      let startY = Math.floor(bottomRight.y/gridSpacing)*gridSpacing;
+      let endY = Math.ceil(topLeft.y/gridSpacing)*gridSpacing;
       ctx.save();
       ctx.lineWidth = 0.5 / viewScale;
       ctx.strokeStyle = "#ddd";
       ctx.beginPath();
-      for(let x=startX; x<=endX; x+=gridSpacing) {
+      for(let x = startX; x <= endX; x += gridSpacing) {
         ctx.moveTo(x, startY);
         ctx.lineTo(x, endY);
       }
-      for(let y=startY; y<=endY; y+=gridSpacing) {
+      for(let y = startY; y <= endY; y += gridSpacing) {
         ctx.moveTo(startX, y);
         ctx.lineTo(endX, y);
       }
       ctx.stroke();
       ctx.restore();
     }
-
     function screenToWorld(sx, sy) {
       return { x: (sx - viewOffsetX)/viewScale, y: -(sy - viewOffsetY)/viewScale };
     }
-    function worldToScreen(x,y) {
+    function worldToScreen(x, y) {
       return { x: viewScale*x + viewOffsetX, y: -viewScale*y + viewOffsetY };
     }
 
     /* =========================================================================
-       Color & Line Type Helpers
+       Color, Line Weight & Linetype Helpers
     ========================================================================= */
     function getACIColor(aci) {
       if (ACI_COLORS.hasOwnProperty(aci)) return ACI_COLORS[aci];
       return "#000000";
     }
-    // getEntityColor – prefers true color (420), then entity color (62); if BYLAYER, look up layer.
     function getEntityColor(entity) {
       if (entity["420"]) {
         let tc = parseInt(entity["420"]);
@@ -633,15 +642,12 @@
       }
       let colorIndex = parseInt(entity["62"]);
       if (!colorIndex || colorIndex === 256) {
-        if (entity["8"] && dxf.layers && dxf.layers[entity["8"]] && dxf.layers[entity["8"]]["62"]) {
+        if (entity["8"] && dxf.layers && dxf.layers[entity["8"]] && dxf.layers[entity["8"]]["62"])
           colorIndex = parseInt(dxf.layers[entity["8"]]["62"]);
-        } else {
-          return "#000000";
-        }
+        else return "#000000";
       }
       return getACIColor(colorIndex);
     }
-    // getEntityLineWidth – based on group code 39 (thickness) or 370 (line weight)
     function getLineWidth(entity) {
       if (entity["39"] && parseFloat(entity["39"]) !== 0) {
         let thickness = parseFloat(entity["39"]);
@@ -652,7 +658,6 @@
       }
       return 1 / viewScale;
     }
-    // getEntityLineDash – returns a dash pattern (in device pixels) based on linetype.
     function getEntityLineDash(entity) {
       let linetypeName = entity["6"];
       if (!linetypeName || linetypeName.toUpperCase() === "BYLAYER") {
@@ -662,10 +667,8 @@
       if (!linetypeName) return [];
       if (dxf.linetypes && dxf.linetypes[linetypeName]) {
         let ltype = dxf.linetypes[linetypeName];
-        if (ltype.pattern && ltype.pattern.length > 0) {
-          // Multiply each dash by viewScale (drawing units -> pixels)
+        if (ltype.pattern && ltype.pattern.length > 0)
           return ltype.pattern.map(d => d * viewScale);
-        }
       }
       return [];
     }
@@ -676,17 +679,19 @@
     function drawEntity(entity) {
       if (entity.type === "TEXT" || entity.type === "ATTRIB") { drawSimpleText(entity); return; }
       if (entity.type === "MTEXT") { drawMTEXT(entity); return; }
+      if (entity.type === "DIMENSION") { drawDimension(entity); return; }
+      if (entity.type === "HATCH") { drawHatch(entity); return; }
       if (entity.type === "INSERT") {
         ctx.save();
         let blockName = entity["2"];
         let block = dxf.blocks[blockName];
         if (block) {
-          let insX = parseFloat(entity["10"])||0,
-              insY = parseFloat(entity["20"])||0;
-          let scaleX = entity["41"] ? parseFloat(entity["41"]) : 1;
-          let scaleY = entity["42"] ? parseFloat(entity["42"]) : 1;
+          let insX = parseFloat(entity["10"]) || 0,
+              insY = parseFloat(entity["20"]) || 0;
+          let scaleX = entity["41"] ? parseFloat(entity["41"]) : 1,
+              scaleY = entity["42"] ? parseFloat(entity["42"]) : 1;
           let rotation = entity["50"] ? degToRad(parseFloat(entity["50"])) : 0;
-          let bp = block.basePoint || { x:0, y:0 };
+          let bp = block.basePoint || {x:0,y:0};
           ctx.translate(insX, insY);
           ctx.rotate(rotation);
           ctx.scale(scaleX, scaleY);
@@ -702,7 +707,6 @@
       let color = getEntityColor(entity);
       ctx.strokeStyle = color;
       ctx.fillStyle = color;
-      // Apply line type dash if available.
       let dash = getEntityLineDash(entity);
       if (dash.length > 0) ctx.setLineDash(dash);
       switch(entity.type) {
@@ -745,9 +749,8 @@
           if (entity.vertices && entity.vertices.length > 0) {
             ctx.beginPath();
             ctx.moveTo(entity.vertices[0].x, entity.vertices[0].y);
-            for (let i=1; i<entity.vertices.length; i++) {
+            for (let i = 1; i < entity.vertices.length; i++)
               ctx.lineTo(entity.vertices[i].x, entity.vertices[i].y);
-            }
             if (entity["70"] && (parseInt(entity["70"]) & 1)) ctx.closePath();
             ctx.stroke();
           }
@@ -778,7 +781,100 @@
     }
 
     /* =========================================================================
-       Comprehensive MTEXT Parsing & Rendering (as in previous examples)
+       Dimension Rendering
+       (A basic linear dimension support)
+    ========================================================================= */
+    function drawDimension(entity) {
+      // Expect group codes:
+      // 10/20: first measured point; 11/21: second measured point;
+      // 1: dimension text (optional)
+      let p1 = { x: parseFloat(entity["10"]), y: parseFloat(entity["20"]) };
+      let p2 = { x: parseFloat(entity["11"]), y: parseFloat(entity["21"]) };
+      let dimText = entity["1"] || "";
+      // Compute unit vector along measured line.
+      let dx = p2.x - p1.x, dy = p2.y - p1.y;
+      let len = Math.sqrt(dx*dx + dy*dy);
+      if (len === 0) return;
+      let ux = dx / len, uy = dy / len;
+      // Perpendicular vector.
+      let vx = -uy, vy = ux;
+      // Offset for extension lines.
+      let offset = 5;
+      let p1_ext = { x: p1.x + vx*offset, y: p1.y + vy*offset };
+      let p2_ext = { x: p2.x + vx*offset, y: p2.y + vy*offset };
+      let color = getEntityColor(entity);
+      let lw = getLineWidth(entity);
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = lw;
+      // Draw extension lines.
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p1_ext.x, p1_ext.y);
+      ctx.moveTo(p2.x, p2.y);
+      ctx.lineTo(p2_ext.x, p2_ext.y);
+      ctx.stroke();
+      // Draw dimension line.
+      ctx.beginPath();
+      ctx.moveTo(p1_ext.x, p1_ext.y);
+      ctx.lineTo(p2_ext.x, p2_ext.y);
+      ctx.stroke();
+      // Draw arrowheads.
+      let arrowSize = 3;
+      function drawArrow(pt, dir) {
+        let halfWidth = arrowSize / 2;
+        let base = { x: pt.x - arrowSize * dir.x, y: pt.y - arrowSize * dir.y };
+        let left = { x: base.x + halfWidth * (-dir.y), y: base.y + halfWidth * (dir.x) };
+        let right = { x: base.x - halfWidth * (-dir.y), y: base.y - halfWidth * (dir.x) };
+        ctx.beginPath();
+        ctx.moveTo(pt.x, pt.y);
+        ctx.lineTo(left.x, left.y);
+        ctx.lineTo(right.x, right.y);
+        ctx.closePath();
+        ctx.fill();
+      }
+      drawArrow(p1_ext, { x: ux, y: uy });
+      drawArrow(p2_ext, { x: -ux, y: -uy });
+      // Draw dimension text at midpoint.
+      let mid = { x: (p1_ext.x+p2_ext.x)/2, y: (p1_ext.y+p2_ext.y)/2 };
+      ctx.save();
+      let angle = Math.atan2(uy, ux);
+      ctx.translate(mid.x, mid.y);
+      ctx.rotate(angle);
+      ctx.font = `${12 * viewScale}px sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(dimText, 0, -3);
+      ctx.restore();
+      ctx.restore();
+    }
+
+    /* =========================================================================
+       Hatch Rendering
+       (A basic hatch fill using a single boundary loop)
+    ========================================================================= */
+    function drawHatch(entity) {
+      if (!entity.boundary || entity.boundary.length === 0) return;
+      ctx.save();
+      let fillColor = getEntityColor(entity) || "#cccccc";
+      ctx.fillStyle = fillColor;
+      ctx.beginPath();
+      let pts = entity.boundary;
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) {
+        ctx.lineTo(pts[i].x, pts[i].y);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = fillColor;
+      ctx.lineWidth = 1 / viewScale;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    /* =========================================================================
+       Comprehensive MTEXT Parsing & Rendering (from previous examples)
     ========================================================================= */
     function parseMTEXTContent(rawText, defaultSize, defaultFont, defaultColor) {
       rawText = rawText.replace(/%%d/g, "°").replace(/%%c/g, "Ø");
@@ -806,13 +902,9 @@
             pos += 2;
             currentSegment = { text:"", style: Object.assign({}, currentStyle) };
             continue;
-          } else if (text.substr(pos,2) === '\\L') {
-            currentStyle.underline = true; pos +=2; continue;
-          } else if (text.substr(pos,2) === '\\l') {
-            currentStyle.underline = false; pos +=2; continue;
-          } else {
-            currentSegment.text += ch; pos++;
-          }
+          } else if (text.substr(pos,2) === '\\L') { currentStyle.underline = true; pos +=2; continue; }
+          else if (text.substr(pos,2) === '\\l') { currentStyle.underline = false; pos +=2; continue; }
+          else { currentSegment.text += ch; pos++; }
         } else { currentSegment.text += ch; pos++; }
       }
       if (currentSegment.text) segments.push(currentSegment);
@@ -856,21 +948,14 @@
       let currentLine = [];
       let currentLineWidth = 0;
       for (let seg of segments) {
-        if (seg.paragraphBreak) {
-          lines.push(currentLine);
-          currentLine = [];
-          currentLineWidth = 0;
-          continue;
-        }
+        if (seg.paragraphBreak) { lines.push(currentLine); currentLine = []; currentLineWidth = 0; continue; }
         let tokens = seg.text.split(/(\s+)/);
         for (let token of tokens) {
           if (token === "") continue;
           let tokenSegment = { text: token, style: seg.style };
           let tokenWidth = measureSegment(tokenSegment, defaultSize);
           if (currentLineWidth + tokenWidth > maxWidth && currentLine.length > 0) {
-            lines.push(currentLine);
-            currentLine = [];
-            currentLineWidth = 0;
+            lines.push(currentLine); currentLine = []; currentLineWidth = 0;
           }
           currentLine.push(tokenSegment);
           currentLineWidth += tokenWidth;
@@ -891,23 +976,19 @@
       let parsedSegments = parseMTEXTContent(rawText, defaultSize, defaultFont, defaultColor);
       let paragraphs = [], currentParagraph = [];
       parsedSegments.forEach(seg => { 
-         if (seg.paragraphBreak) { paragraphs.push(currentParagraph); currentParagraph = []; }
-         else { currentParagraph.push(seg); }
+        if (seg.paragraphBreak) { paragraphs.push(currentParagraph); currentParagraph = []; }
+        else { currentParagraph.push(seg); }
       });
       if (currentParagraph.length > 0) paragraphs.push(currentParagraph);
       let maxWidth = parseFloat(entity["41"]) || 0;
       let wrappedLines = [];
       if (maxWidth > 0) {
          let maxWidthScreen = maxWidth * viewScale;
-         paragraphs.forEach(para => {
-           let lines = wrapMTEXTSegments(para, maxWidthScreen, defaultSize);
-           wrappedLines.push(...lines);
-         });
+         paragraphs.forEach(para => { let lines = wrapMTEXTSegments(para, maxWidthScreen, defaultSize); wrappedLines.push(...lines); });
       } else { wrappedLines = paragraphs; }
       let align = parseInt(entity["71"]) || 1;
       let hAlign = align % 3, vAlign = Math.floor((align-1)/3);
-      let lineHeight = defaultSize * viewScale * 1.2,
-          totalHeight = wrappedLines.length * lineHeight;
+      let lineHeight = defaultSize * viewScale * 1.2, totalHeight = wrappedLines.length * lineHeight;
       let lineWidths = [], maxLineWidth = 0;
       wrappedLines.forEach(line => {
          let width = line.reduce((sum, seg) => sum + measureSegment(seg, defaultSize), 0);
