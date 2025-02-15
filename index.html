@@ -908,36 +908,41 @@
     }
 
     /* =========================================================================
-       Dimension Rendering – Improved Version
+       Dimension Rendering – Updated Version with Midpoint Alignment
     ========================================================================= */
     function drawDimension(entity) {
+      // Get the two extension line start points.
       let p1 = { x: parseFloat(entity["10"]), y: parseFloat(entity["20"]) };
       let p2 = { x: parseFloat(entity["11"]), y: parseFloat(entity["21"]) };
 
-      // Determine dimension definition point if available (group codes "13" and "23")
-      let hasDefPoint = ("13" in entity && "23" in entity);
-      let dimDefPoint = hasDefPoint ? { x: parseFloat(entity["13"]), y: parseFloat(entity["23"]) } : null;
-
-      // Compute baseline vector and its length
+      // Compute the baseline (from p1 to p2) and its unit vector.
       let dx = p2.x - p1.x, dy = p2.y - p1.y;
       let baselineLength = Math.sqrt(dx * dx + dy * dy);
       if (baselineLength === 0) return;
-      let u = { x: dx / baselineLength, y: dy / baselineLength }; // unit vector along baseline
-      let v = { x: -u.y, y: u.x }; // perpendicular vector
+      let u = { x: dx / baselineLength, y: dy / baselineLength };
 
-      // Determine offset distance: if definition point exists, use its projection onto v, else default offset
+      // v is the unit vector perpendicular to the baseline.
+      let v = { x: -u.y, y: u.x };
+
+      // Use the midpoint of p1 and p2 as the reference.
+      let mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+
+      // If group codes 13/23 (the definition/text insertion point) are provided,
+      // compute the offset as the perpendicular distance from mid to that point.
       let offsetDistance;
-      if (dimDefPoint) {
-        offsetDistance = (dimDefPoint.x - p1.x) * v.x + (dimDefPoint.y - p1.y) * v.y;
+      if ("13" in entity && "23" in entity) {
+        let defPt = { x: parseFloat(entity["13"]), y: parseFloat(entity["23"]) };
+        offsetDistance = (defPt.x - mid.x) * v.x + (defPt.y - mid.y) * v.y;
       } else {
-        offsetDistance = 5;
+        offsetDistance = 5; // default offset if no definition point is provided.
       }
 
-      // Compute the points where the extension lines meet the dimension line
+      // Compute the intersection of the extension lines with the dimension line.
       let p1_dim = { x: p1.x + v.x * offsetDistance, y: p1.y + v.y * offsetDistance };
       let p2_dim = { x: p2.x + v.x * offsetDistance, y: p2.y + v.y * offsetDistance };
 
-      // Determine dimension text: if empty or "<>", use measured length
+      // Determine the dimension text; if none is provided or it's "<>",
+      // default to showing the measured length.
       let dimText = (entity["1"] || "").trim();
       if (dimText === "" || dimText === "<>") {
         dimText = baselineLength.toFixed(2);
@@ -950,7 +955,7 @@
       ctx.fillStyle = color;
       ctx.lineWidth = lw;
 
-      // Draw extension lines
+      // Draw the extension lines.
       ctx.beginPath();
       ctx.moveTo(p1.x, p1.y);
       ctx.lineTo(p1_dim.x, p1_dim.y);
@@ -958,13 +963,13 @@
       ctx.lineTo(p2_dim.x, p2_dim.y);
       ctx.stroke();
 
-      // Draw the dimension line
+      // Draw the dimension line.
       ctx.beginPath();
       ctx.moveTo(p1_dim.x, p1_dim.y);
       ctx.lineTo(p2_dim.x, p2_dim.y);
       ctx.stroke();
 
-      // Function to draw arrowheads at the ends of the dimension line
+      // Function to draw an arrowhead.
       function drawArrow(pt, direction) {
         const arrowSize = 3;
         const arrowAngle = Math.PI / 6; // 30 degrees
@@ -979,7 +984,8 @@
         ctx.closePath();
         ctx.fill();
       }
-      // Compute arrow direction for each end of the dimension line
+
+      // Determine arrow direction (along the dimension line).
       let arrowDir = { x: p2_dim.x - p1_dim.x, y: p2_dim.y - p1_dim.y };
       let arrowLen = Math.sqrt(arrowDir.x * arrowDir.x + arrowDir.y * arrowDir.y);
       if (arrowLen !== 0) {
@@ -989,21 +995,23 @@
         drawArrow(p2_dim, { x: -arrowDir.x, y: -arrowDir.y });
       }
 
-      // Draw the dimension text centered on the dimension line
-      let midPoint = { x: (p1_dim.x + p2_dim.x) / 2, y: (p1_dim.y + p2_dim.y) / 2 };
+      // Place the dimension text centered along the dimension line.
+      let dimLineMid = { x: (p1_dim.x + p2_dim.x) / 2, y: (p1_dim.y + p2_dim.y) / 2 };
+      // Use the baseline direction to compute the angle.
       let angle = Math.atan2(u.y, u.x);
-      // Adjust angle so text is not upside down
+      // Flip the angle if it would render the text upside down.
       if (angle > Math.PI / 2 || angle < -Math.PI / 2) {
         angle += Math.PI;
       }
+
       ctx.save();
-      ctx.translate(midPoint.x, midPoint.y);
+      ctx.translate(dimLineMid.x, dimLineMid.y);
       ctx.rotate(angle);
       const fontSize = 12;
       ctx.font = `${fontSize}px sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(dimText, 0, -3);
+      ctx.fillText(dimText, 0, 0);
       ctx.restore();
 
       ctx.restore();
