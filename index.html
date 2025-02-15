@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Advanced Web DXF Viewer – Dimensions & Hatches</title>
+  <title>Advanced Web DXF Viewer – Dimensions, Hatch & MTEXT</title>
   <style>
     /* Fullscreen canvas and toolbar styling */
     body {
@@ -404,7 +404,7 @@
     }
 
     /* =========================================================================
-       parseEntity – Extended to support DIMENSION and HATCH
+       parseEntity – Extended to support DIMENSION, HATCH, and MTEXT
     ========================================================================= */
     function parseEntity(lines, i) {
       if (i >= lines.length) return null;
@@ -461,7 +461,7 @@
         return { entity: entity, nextIndex: i };
       } else if (entity.type === "HATCH") {
         // For our simplified hatch, we parse boundary points and additional hatch parameters.
-        // Boundary points (group codes 10/20) are collected into entity.boundary.
+        // Group codes 10/20 are collected into entity.boundary.
         entity.boundary = [];
         while (i < lines.length) {
           code = lines[i].trim();
@@ -486,6 +486,16 @@
         return { entity: entity, nextIndex: i };
       } else if (entity.type === "DIMENSION") {
         // Simply collect all group codes; our draw function will interpret common ones.
+        while (i < lines.length) {
+          code = lines[i].trim();
+          if (code === "0") break;
+          value = lines[i+1] ? lines[i+1].trim() : "";
+          entity[code] = value;
+          i += 2;
+        }
+        return { entity: entity, nextIndex: i };
+      } else if (entity.type === "MTEXT") {
+        // MTEXT parsing: collect group codes for position, text, style, etc.
         while (i < lines.length) {
           code = lines[i].trim();
           if (code === "0") break;
@@ -616,6 +626,7 @@
         y: x * Math.sin(angle) + y * Math.cos(angle)
       };
     }
+    function degToRad(deg) { return (deg * Math.PI)/180; }
 
     /* =========================================================================
        Drawing Functions
@@ -837,7 +848,7 @@
       // Perpendicular vector.
       let vx = -uy, vy = ux;
 
-      // Offset for extension lines (adjust as needed).
+      // Offset for extension lines.
       let offset = 5;
       let p1_ext = { x: p1.x + vx * offset, y: p1.y + vy * offset };
       let p2_ext = { x: p2.x + vx * offset, y: p2.y + vy * offset };
@@ -886,7 +897,7 @@
 
       // Calculate the angle of the measured line.
       let angle = Math.atan2(uy, ux);
-      // Adjust angle to keep text readable (avoid upside-down text).
+      // Adjust angle to keep text readable.
       if (angle > Math.PI / 2 || angle < -Math.PI / 2) {
         angle += Math.PI;
       }
@@ -894,11 +905,9 @@
       ctx.save();
       ctx.translate(mid.x, mid.y);
       ctx.rotate(angle);
-      // Set text style. You might want to adjust the font size and offset relative to viewScale.
       ctx.font = `12px sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      // Draw the dimension text slightly above the dimension line.
       ctx.fillText(dimText, 0, -offset - 2);
       ctx.restore();
       ctx.restore();
@@ -906,13 +915,12 @@
 
     /* =========================================================================
        Hatch Rendering
-       (Enhanced to support both solid and pattern fills)
+       (Enhanced to support both solid and pattern fills with correct size)
     ========================================================================= */
     function drawHatch(entity) {
       if (!entity.boundary || entity.boundary.length === 0) return;
       
       // Determine whether to use solid fill or pattern fill.
-      // Group code 70 may indicate the fill style; also check the pattern name (group code 2).
       let isSolid = false;
       if (entity["70"] !== undefined) {
         isSolid = (parseInt(entity["70"]) & 1) !== 0;
@@ -925,7 +933,7 @@
       }
       
       if (isSolid) {
-        // Solid fill: simply create a path from the boundary and fill it.
+        // Solid fill: create a path from the boundary and fill it.
         ctx.save();
         let fillColor = getEntityColor(entity) || "#cccccc";
         ctx.fillStyle = fillColor;
@@ -978,50 +986,47 @@
         
         // Get hatch pattern parameters.
         let patternAngle = degToRad(parseFloat(entity["52"]) || 0);
-        let spacing = parseFloat(entity["41"]) || 10; // default spacing if not provided
+        let spacing = parseFloat(entity["41"]) || 10; // default spacing
         
         // Compute bounding box for the hatch boundary.
         let bbox = computeBBox(entity.boundary);
         
-        // Rotate coordinate system so that hatch lines become horizontal.
+        // Compute rotated bounding box corners.
+        let corners = [
+          { x: bbox.minX, y: bbox.minY },
+          { x: bbox.maxX, y: bbox.minY },
+          { x: bbox.maxX, y: bbox.maxY },
+          { x: bbox.minX, y: bbox.maxY }
+        ];
+        let rotatedCorners = corners.map(pt => rotatePoint(pt.x, pt.y, -patternAngle));
+        let rotatedXs = rotatedCorners.map(pt => pt.x);
+        let rotatedYs = rotatedCorners.map(pt => pt.y);
+        let minXRot = Math.min(...rotatedXs);
+        let maxXRot = Math.max(...rotatedXs);
+        let minYRot = Math.min(...rotatedYs);
+        let maxYRot = Math.max(...rotatedYs);
+        
+        // Draw hatch lines in the rotated coordinate system.
         ctx.save();
         ctx.rotate(-patternAngle);
-        
-        // Transform bbox corners to the rotated coordinate system to compute vertical span.
-        let corners = [
-          {x: bbox.minX, y: bbox.minY},
-          {x: bbox.maxX, y: bbox.minY},
-          {x: bbox.maxX, y: bbox.maxY},
-          {x: bbox.minX, y: bbox.maxY}
-        ];
-        let rotatedYs = corners.map(pt => {
-          let r = rotatePoint(pt.x, pt.y, -patternAngle);
-          return r.y;
-        });
-        let minY = Math.min(...rotatedYs);
-        let maxY = Math.max(...rotatedYs);
-        
-        // Draw horizontal lines spaced by "spacing".
         ctx.beginPath();
-        let lineStartX = bbox.minX - spacing;
-        let lineEndX = bbox.maxX + spacing;
-        for (let y = minY - spacing; y <= maxY + spacing; y += spacing) {
-          ctx.moveTo(lineStartX, y);
-          ctx.lineTo(lineEndX, y);
+        for (let y = minYRot - spacing; y <= maxYRot + spacing; y += spacing) {
+          ctx.moveTo(minXRot - spacing, y);
+          ctx.lineTo(maxXRot + spacing, y);
         }
         ctx.strokeStyle = getEntityColor(entity);
         ctx.lineWidth = 1 / viewScale;
         ctx.stroke();
-        ctx.restore(); // restore rotation
-        
-        ctx.restore(); // restore clipping region
+        ctx.restore();
+        ctx.restore();
       }
     }
 
     /* =========================================================================
-       Comprehensive MTEXT Parsing & Rendering (from previous examples)
+       MTEXT Parsing & Rendering – Improved Formatting & Layout
     ========================================================================= */
     function parseMTEXTContent(rawText, defaultSize, defaultFont, defaultColor) {
+      // Replace common DXF escape sequences.
       rawText = rawText.replace(/%%d/g, "°").replace(/%%c/g, "Ø");
       let defaultStyle = { scale: 1, font: defaultFont, underline: false, bold: false, italic: false, color: defaultColor };
       let result = parseFormattedText(rawText, 0, defaultStyle);
@@ -1109,7 +1114,6 @@
       if (currentLine.length > 0) lines.push(currentLine);
       return lines;
     }
-    function degToRad(deg) { return (deg * Math.PI)/180; }
     function drawMTEXT(entity) {
       let x = parseFloat(entity["10"]),
           y = parseFloat(entity["20"]),
@@ -1119,28 +1123,39 @@
           defaultFont = entity["7"] || "sans-serif",
           defaultColor = getEntityColor(entity);
       let parsedSegments = parseMTEXTContent(rawText, defaultSize, defaultFont, defaultColor);
+      // Split segments into paragraphs
       let paragraphs = [], currentParagraph = [];
       parsedSegments.forEach(seg => { 
         if (seg.paragraphBreak) { paragraphs.push(currentParagraph); currentParagraph = []; }
         else { currentParagraph.push(seg); }
       });
       if (currentParagraph.length > 0) paragraphs.push(currentParagraph);
+      // Wrap lines if a wrap width is provided (group code 41)
       let maxWidth = parseFloat(entity["41"]) || 0;
       let wrappedLines = [];
       if (maxWidth > 0) {
+         // Convert wrap width from drawing units to screen units.
          let maxWidthScreen = maxWidth * viewScale;
-         paragraphs.forEach(para => { let lines = wrapMTEXTSegments(para, maxWidthScreen, defaultSize); wrappedLines.push(...lines); });
+         paragraphs.forEach(para => { 
+           let lines = wrapMTEXTSegments(para, maxWidthScreen, defaultSize);
+           wrappedLines.push(...lines);
+         });
       } else { wrappedLines = paragraphs; }
+      
+      // Alignment: group code 71 defines the attachment point.
       let align = parseInt(entity["71"]) || 1;
       let hAlign = align % 3, vAlign = Math.floor((align-1)/3);
-      let lineHeight = defaultSize * viewScale * 1.2, totalHeight = wrappedLines.length * lineHeight;
+      let lineHeight = defaultSize * viewScale * 1.2;
+      let totalHeight = wrappedLines.length * lineHeight;
       let lineWidths = [], maxLineWidth = 0;
       wrappedLines.forEach(line => {
          let width = line.reduce((sum, seg) => sum + measureSegment(seg, defaultSize), 0);
          lineWidths.push(width);
          if (width > maxLineWidth) maxLineWidth = width;
       });
-      let offsetY = (vAlign === 1) ? -totalHeight/2 : (vAlign === 2) ? -totalHeight : 0;
+      // Calculate vertical offset based on vertical alignment.
+      let offsetY = (vAlign === 1) ? -totalHeight/2 : (vAlign === 2 ? -totalHeight : 0);
+      
       ctx.save();
       ctx.setTransform(1,0,0,1,0,0);
       let screenPos = worldToScreen(x,y);
