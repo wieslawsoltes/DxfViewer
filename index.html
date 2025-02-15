@@ -908,42 +908,70 @@
     }
 
     /* =========================================================================
-       Dimension Rendering
+       Dimension Rendering – Improved Version
     ========================================================================= */
     function drawDimension(entity) {
       let p1 = { x: parseFloat(entity["10"]), y: parseFloat(entity["20"]) };
       let p2 = { x: parseFloat(entity["11"]), y: parseFloat(entity["21"]) };
-      let dimText = entity["1"] || "";
+
+      // Determine dimension definition point if available (group codes "13" and "23")
+      let hasDefPoint = ("13" in entity && "23" in entity);
+      let dimDefPoint = hasDefPoint ? { x: parseFloat(entity["13"]), y: parseFloat(entity["23"]) } : null;
+
+      // Compute baseline vector and its length
       let dx = p2.x - p1.x, dy = p2.y - p1.y;
-      let len = Math.sqrt(dx * dx + dy * dy);
-      if (len === 0) return;
-      let ux = dx / len, uy = dy / len;
-      let vx = -uy, vy = ux;
-      let offset = 5;
-      let p1_ext = { x: p1.x + vx * offset, y: p1.y + vy * offset };
-      let p2_ext = { x: p2.x + vx * offset, y: p2.y + vy * offset };
+      let baselineLength = Math.sqrt(dx * dx + dy * dy);
+      if (baselineLength === 0) return;
+      let u = { x: dx / baselineLength, y: dy / baselineLength }; // unit vector along baseline
+      let v = { x: -u.y, y: u.x }; // perpendicular vector
+
+      // Determine offset distance: if definition point exists, use its projection onto v, else default offset
+      let offsetDistance;
+      if (dimDefPoint) {
+        offsetDistance = (dimDefPoint.x - p1.x) * v.x + (dimDefPoint.y - p1.y) * v.y;
+      } else {
+        offsetDistance = 5;
+      }
+
+      // Compute the points where the extension lines meet the dimension line
+      let p1_dim = { x: p1.x + v.x * offsetDistance, y: p1.y + v.y * offsetDistance };
+      let p2_dim = { x: p2.x + v.x * offsetDistance, y: p2.y + v.y * offsetDistance };
+
+      // Determine dimension text: if empty or "<>", use measured length
+      let dimText = (entity["1"] || "").trim();
+      if (dimText === "" || dimText === "<>") {
+        dimText = baselineLength.toFixed(2);
+      }
+
       let color = getEntityColor(entity);
       let lw = getLineWidth(entity);
       ctx.save();
       ctx.strokeStyle = color;
       ctx.fillStyle = color;
       ctx.lineWidth = lw;
+
+      // Draw extension lines
       ctx.beginPath();
       ctx.moveTo(p1.x, p1.y);
-      ctx.lineTo(p1_ext.x, p1_ext.y);
+      ctx.lineTo(p1_dim.x, p1_dim.y);
       ctx.moveTo(p2.x, p2.y);
-      ctx.lineTo(p2_ext.x, p2_ext.y);
+      ctx.lineTo(p2_dim.x, p2_dim.y);
       ctx.stroke();
+
+      // Draw the dimension line
       ctx.beginPath();
-      ctx.moveTo(p1_ext.x, p1_ext.y);
-      ctx.lineTo(p2_ext.x, p2_ext.y);
+      ctx.moveTo(p1_dim.x, p1_dim.y);
+      ctx.lineTo(p2_dim.x, p2_dim.y);
       ctx.stroke();
-      let arrowSize = 3;
-      function drawArrow(pt, dir) {
-        let halfWidth = arrowSize / 2;
-        let base = { x: pt.x - arrowSize * dir.x, y: pt.y - arrowSize * dir.y };
-        let left = { x: base.x + halfWidth * (-dir.y), y: base.y + halfWidth * (dir.x) };
-        let right = { x: base.x - halfWidth * (-dir.y), y: base.y - halfWidth * (dir.x) };
+
+      // Function to draw arrowheads at the ends of the dimension line
+      function drawArrow(pt, direction) {
+        const arrowSize = 3;
+        const arrowAngle = Math.PI / 6; // 30 degrees
+        let leftAngle = Math.atan2(direction.y, direction.x) + arrowAngle;
+        let rightAngle = Math.atan2(direction.y, direction.x) - arrowAngle;
+        let left = { x: pt.x - arrowSize * Math.cos(leftAngle), y: pt.y - arrowSize * Math.sin(leftAngle) };
+        let right = { x: pt.x - arrowSize * Math.cos(rightAngle), y: pt.y - arrowSize * Math.sin(rightAngle) };
         ctx.beginPath();
         ctx.moveTo(pt.x, pt.y);
         ctx.lineTo(left.x, left.y);
@@ -951,21 +979,33 @@
         ctx.closePath();
         ctx.fill();
       }
-      drawArrow(p1_ext, { x: ux, y: uy });
-      drawArrow(p2_ext, { x: -ux, y: -uy });
-      let mid = { x: (p1_ext.x + p2_ext.x) / 2, y: (p1_ext.y + p2_ext.y) / 2 };
-      let angle = Math.atan2(uy, ux);
+      // Compute arrow direction for each end of the dimension line
+      let arrowDir = { x: p2_dim.x - p1_dim.x, y: p2_dim.y - p1_dim.y };
+      let arrowLen = Math.sqrt(arrowDir.x * arrowDir.x + arrowDir.y * arrowDir.y);
+      if (arrowLen !== 0) {
+        arrowDir.x /= arrowLen;
+        arrowDir.y /= arrowLen;
+        drawArrow(p1_dim, arrowDir);
+        drawArrow(p2_dim, { x: -arrowDir.x, y: -arrowDir.y });
+      }
+
+      // Draw the dimension text centered on the dimension line
+      let midPoint = { x: (p1_dim.x + p2_dim.x) / 2, y: (p1_dim.y + p2_dim.y) / 2 };
+      let angle = Math.atan2(u.y, u.x);
+      // Adjust angle so text is not upside down
       if (angle > Math.PI / 2 || angle < -Math.PI / 2) {
         angle += Math.PI;
       }
       ctx.save();
-      ctx.translate(mid.x, mid.y);
+      ctx.translate(midPoint.x, midPoint.y);
       ctx.rotate(angle);
-      ctx.font = `12px sans-serif`;
+      const fontSize = 12;
+      ctx.font = `${fontSize}px sans-serif`;
       ctx.textAlign = "center";
-      ctx.textBaseline = "alphabetic";
-      ctx.fillText(dimText, 0, -offset - 2);
+      ctx.textBaseline = "middle";
+      ctx.fillText(dimText, 0, -3);
       ctx.restore();
+
       ctx.restore();
     }
 
