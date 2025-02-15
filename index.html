@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Advanced Web DXF Viewer</title>
+  <title>Advanced Web DXF Viewer (Corrected Coordinates & MTEXT)</title>
   <style>
     /* Fullscreen canvas and simple toolbar styling */
     body {
@@ -215,7 +215,7 @@
     // --- DXF Parsing ---
     // This simplified parser looks for SECTION markers and supports the ENTITIES and BLOCKS sections.
     // It supports LINE, CIRCLE, ARC, POLYLINE (and its vertices via VERTEX/SEQEND),
-    // LWPOLYLINE, TEXT/MTEXT, INSERT (with attached ATTRIBs).
+    // LWPOLYLINE, TEXT, MTEXT, and INSERT (with attached ATTRIBs).
     function parseDXF(text) {
       const lines = text.split(/\r\n|\n/);
       const dxf = { entities: [], blocks: {} };
@@ -500,9 +500,11 @@
       baseScale = 0.9 * Math.min(scaleX, scaleY);
       const centerX = (minX + maxX) / 2;
       const centerY = (minY + maxY) / 2;
+      // Using a transform with negative Y–scale:
+      // We want T(centerX, centerY) = (canvas.width/2, canvas.height/2)
+      viewScale = baseScale;
       baseOffsetX = canvas.width / 2 - baseScale * centerX;
       baseOffsetY = canvas.height / 2 + baseScale * centerY;
-      viewScale = baseScale;
       viewOffsetX = baseOffsetX;
       viewOffsetY = baseOffsetY;
     }
@@ -516,6 +518,7 @@
       ctx.restore();
 
       // Set the world transform.
+      // The Y axis is flipped so that DXF world coordinates (with Y up) render properly.
       ctx.setTransform(viewScale, 0, 0, -viewScale, viewOffsetX, viewOffsetY);
 
       // Optionally draw a grid.
@@ -530,7 +533,6 @@
     // Draw a grid in world coordinates.
     function drawGrid() {
       const gridSpacing = 10;
-      const invScale = 1 / viewScale;
       const topLeft = screenToWorld(0, 0);
       const bottomRight = screenToWorld(canvas.width, canvas.height);
       const startX = Math.floor(topLeft.x / gridSpacing) * gridSpacing;
@@ -553,17 +555,57 @@
       ctx.restore();
     }
 
-    // Convert screen (pixel) coordinates to world coordinates.
+    // Convert screen (pixel) coordinates to world (DXF) coordinates.
     function screenToWorld(sx, sy) {
+      // Inverse of: (x, y) -> (viewScale*x + viewOffsetX, -viewScale*y + viewOffsetY)
       const x = (sx - viewOffsetX) / viewScale;
       const y = -(sy - viewOffsetY) / viewScale;
       return { x, y };
     }
 
+    // Convert world coordinates to screen coordinates.
+    // This is used for drawing text without the flipped Y.
+    function worldToScreen(x, y) {
+      return {
+        x: viewScale * x + viewOffsetX,
+        y: -viewScale * y + viewOffsetY
+      };
+    }
+
     // Draw an individual DXF entity.
-    // For entities that are “inserted” via a block, we use canvas transforms to apply
-    // the block transformation.
+    // For TEXT, MTEXT, and ATTRIB, we use a separate routine so that text is drawn unflipped.
     function drawEntity(entity) {
+      // For text entities, use our custom text drawer.
+      if (entity.type === "TEXT" || entity.type === "MTEXT" || entity.type === "ATTRIB") {
+        drawText(entity);
+        return;
+      }
+      // For INSERT entities, we need to apply block transforms.
+      if (entity.type === "INSERT") {
+        ctx.save();
+        const blockName = entity["2"];
+        const block = dxf.blocks[blockName];
+        if (block) {
+          const insX = parseFloat(entity["10"]) || 0;
+          const insY = parseFloat(entity["20"]) || 0;
+          const scaleX = entity["41"] ? parseFloat(entity["41"]) : 1;
+          const scaleY = entity["42"] ? parseFloat(entity["42"]) : 1;
+          const rotation = entity["50"] ? degToRad(parseFloat(entity["50"])) : 0;
+          const bp = block.basePoint || { x: 0, y: 0 };
+          ctx.translate(insX, insY);
+          ctx.rotate(rotation);
+          ctx.scale(scaleX, scaleY);
+          ctx.translate(-bp.x, -bp.y);
+          block.entities.forEach(be => drawEntity(be));
+          if (entity.attribs) {
+            entity.attribs.forEach(attr => drawEntity(attr));
+          }
+        }
+        ctx.restore();
+        return;
+      }
+
+      // Draw other geometric entities.
       ctx.save();
       ctx.lineWidth = 1 / viewScale;
       ctx.strokeStyle = "#000";
@@ -621,58 +663,53 @@
             }
           }
           break;
-        case "TEXT":
-        case "MTEXT":
-        case "ATTRIB":
-          {
-            const x = parseFloat(entity["10"]);
-            const y = parseFloat(entity["20"]);
-            const height = entity["40"] ? parseFloat(entity["40"]) : 12;
-            const rotation = entity["50"] ? degToRad(parseFloat(entity["50"])) : 0;
-            const text = entity["1"] || "";
-            ctx.save();
-            ctx.translate(x, y);
-            // Because our world Y is flipped, we rotate in the opposite direction.
-            ctx.rotate(-rotation);
-            ctx.font = `${height}px sans-serif`;
-            // Draw text with the baseline in the middle.
-            ctx.textBaseline = "middle";
-            ctx.fillText(text, 0, 0);
-            ctx.restore();
-          }
-          break;
-        case "INSERT":
-          {
-            // Look up the block definition.
-            const blockName = entity["2"];
-            const block = dxf.blocks[blockName];
-            if (block) {
-              ctx.save();
-              // Get INSERT parameters.
-              const insX = parseFloat(entity["10"]) || 0;
-              const insY = parseFloat(entity["20"]) || 0;
-              const scaleX = entity["41"] ? parseFloat(entity["41"]) : 1;
-              const scaleY = entity["42"] ? parseFloat(entity["42"]) : 1;
-              const rotation = entity["50"] ? degToRad(parseFloat(entity["50"])) : 0;
-              const bp = block.basePoint || { x: 0, y: 0 };
-              // Apply transformation: translate to insertion point, rotate, scale, then offset by block base.
-              ctx.translate(insX, insY);
-              ctx.rotate(rotation);
-              ctx.scale(scaleX, scaleY);
-              ctx.translate(-bp.x, -bp.y);
-              // Draw each entity in the block.
-              block.entities.forEach(be => drawEntity(be));
-              // If the INSERT has attached ATTRIBs, draw them.
-              if (entity.attribs) {
-                entity.attribs.forEach(attr => drawEntity(attr));
-              }
-              ctx.restore();
-            }
-          }
-          break;
         default:
           // Unsupported entity types are simply ignored.
           break;
+      }
+      ctx.restore();
+    }
+
+    // --- Text Drawing ---
+    // Draws TEXT, MTEXT, and ATTRIB entities so that the text appears upright.
+    // It computes the screen coordinate (using the current view transform)
+    // and then resets the transform to draw text with the proper font size and rotation.
+    function drawText(entity) {
+      // Get world insertion point.
+      const x = parseFloat(entity["10"]);
+      const y = parseFloat(entity["20"]);
+      // Text height (default to 12 if not specified)
+      const height = entity["40"] ? parseFloat(entity["40"]) : 12;
+      // DXF text rotation (in degrees); convert to radians.
+      const rotation = entity["50"] ? degToRad(parseFloat(entity["50"])) : 0;
+      // The text content is stored in group code "1". (MTEXT may also use "1".)
+      const rawText = entity["1"] || "";
+      // Compute screen coordinate from world coordinate.
+      const screen = worldToScreen(x, y);
+      // Compute the font size in screen space.
+      const screenFontSize = height * viewScale;
+
+      // Reset transform so that text is drawn normally.
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.translate(screen.x, screen.y);
+      // Because the global transform flipped Y, we use -rotation so that text appears with the correct orientation.
+      ctx.rotate(-rotation);
+      ctx.fillStyle = "#000";
+      ctx.textBaseline = "middle";
+      
+      // If MTEXT, split into lines on "\P" (DXF line break) or newline.
+      if (entity.type === "MTEXT") {
+        const lines = rawText.split(/\\P|\n/);
+        const lineHeight = screenFontSize * 1.2;
+        ctx.font = `${screenFontSize}px sans-serif`;
+        for (let i = 0; i < lines.length; i++) {
+          ctx.fillText(lines[i], 0, i * lineHeight);
+        }
+      } else {
+        // For TEXT and ATTRIB, just draw a single line.
+        ctx.font = `${screenFontSize}px sans-serif`;
+        ctx.fillText(rawText, 0, 0);
       }
       ctx.restore();
     }
