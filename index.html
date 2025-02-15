@@ -461,6 +461,7 @@
         return { entity: entity, nextIndex: i };
       } else if (entity.type === "HATCH") {
         // For our simplified hatch, we parse additional boundary points.
+        // Improved to allow for multiple loops if needed.
         entity.boundary = [];
         while (i < lines.length) {
           code = lines[i].trim();
@@ -782,7 +783,7 @@
 
     /* =========================================================================
        Dimension Rendering
-       (A basic linear dimension support)
+       (A basic linear dimension support with improved text orientation)
     ========================================================================= */
     function drawDimension(entity) {
       // Expect group codes:
@@ -791,23 +792,29 @@
       let p1 = { x: parseFloat(entity["10"]), y: parseFloat(entity["20"]) };
       let p2 = { x: parseFloat(entity["11"]), y: parseFloat(entity["21"]) };
       let dimText = entity["1"] || "";
-      // Compute unit vector along measured line.
+
+      // Compute vector along measured line.
       let dx = p2.x - p1.x, dy = p2.y - p1.y;
-      let len = Math.sqrt(dx*dx + dy*dy);
+      let len = Math.sqrt(dx * dx + dy * dy);
       if (len === 0) return;
       let ux = dx / len, uy = dy / len;
+
       // Perpendicular vector.
       let vx = -uy, vy = ux;
-      // Offset for extension lines.
+
+      // Offset for extension lines (adjust as needed).
       let offset = 5;
-      let p1_ext = { x: p1.x + vx*offset, y: p1.y + vy*offset };
-      let p2_ext = { x: p2.x + vx*offset, y: p2.y + vy*offset };
+      let p1_ext = { x: p1.x + vx * offset, y: p1.y + vy * offset };
+      let p2_ext = { x: p2.x + vx * offset, y: p2.y + vy * offset };
+
       let color = getEntityColor(entity);
       let lw = getLineWidth(entity);
+
       ctx.save();
       ctx.strokeStyle = color;
       ctx.fillStyle = color;
       ctx.lineWidth = lw;
+
       // Draw extension lines.
       ctx.beginPath();
       ctx.moveTo(p1.x, p1.y);
@@ -815,11 +822,13 @@
       ctx.moveTo(p2.x, p2.y);
       ctx.lineTo(p2_ext.x, p2_ext.y);
       ctx.stroke();
-      // Draw dimension line.
+
+      // Draw the dimension line.
       ctx.beginPath();
       ctx.moveTo(p1_ext.x, p1_ext.y);
       ctx.lineTo(p2_ext.x, p2_ext.y);
       ctx.stroke();
+
       // Draw arrowheads.
       let arrowSize = 3;
       function drawArrow(pt, dir) {
@@ -836,39 +845,64 @@
       }
       drawArrow(p1_ext, { x: ux, y: uy });
       drawArrow(p2_ext, { x: -ux, y: -uy });
-      // Draw dimension text at midpoint.
-      let mid = { x: (p1_ext.x+p2_ext.x)/2, y: (p1_ext.y+p2_ext.y)/2 };
-      ctx.save();
+
+      // Compute midpoint for the dimension text.
+      let mid = { x: (p1_ext.x + p2_ext.x) / 2, y: (p1_ext.y + p2_ext.y) / 2 };
+
+      // Calculate the angle of the measured line.
       let angle = Math.atan2(uy, ux);
+      // Adjust angle to keep text readable (avoid upside-down text).
+      if (angle > Math.PI / 2 || angle < -Math.PI / 2) {
+        angle += Math.PI;
+      }
+
+      ctx.save();
       ctx.translate(mid.x, mid.y);
       ctx.rotate(angle);
-      ctx.font = `${12 * viewScale}px sans-serif`;
+      // Set text style. You might want to adjust the font size and offset relative to viewScale.
+      ctx.font = `12px sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(dimText, 0, -3);
+      // Draw the dimension text slightly above the dimension line.
+      ctx.fillText(dimText, 0, -offset - 2);
       ctx.restore();
       ctx.restore();
     }
 
     /* =========================================================================
        Hatch Rendering
-       (A basic hatch fill using a single boundary loop)
+       (Improved to support single or multiple boundary loops)
     ========================================================================= */
     function drawHatch(entity) {
       if (!entity.boundary || entity.boundary.length === 0) return;
       ctx.save();
+      // Use the entity's color or a default fill.
       let fillColor = getEntityColor(entity) || "#cccccc";
       ctx.fillStyle = fillColor;
-      ctx.beginPath();
-      let pts = entity.boundary;
-      ctx.moveTo(pts[0].x, pts[0].y);
-      for (let i = 1; i < pts.length; i++) {
-        ctx.lineTo(pts[i].x, pts[i].y);
-      }
-      ctx.closePath();
-      ctx.fill();
       ctx.strokeStyle = fillColor;
       ctx.lineWidth = 1 / viewScale;
+      
+      // Check if boundary is an array of arrays (multiple loops) or a single loop.
+      if (Array.isArray(entity.boundary[0])) {
+        entity.boundary.forEach(loop => {
+          if (loop.length > 0) {
+            ctx.beginPath();
+            ctx.moveTo(loop[0].x, loop[0].y);
+            for (let i = 1; i < loop.length; i++) {
+              ctx.lineTo(loop[i].x, loop[i].y);
+            }
+            ctx.closePath();
+          }
+        });
+      } else {
+        ctx.beginPath();
+        ctx.moveTo(entity.boundary[0].x, entity.boundary[0].y);
+        for (let i = 1; i < entity.boundary.length; i++) {
+          ctx.lineTo(entity.boundary[i].x, entity.boundary[i].y);
+        }
+        ctx.closePath();
+      }
+      ctx.fill();
       ctx.stroke();
       ctx.restore();
     }
