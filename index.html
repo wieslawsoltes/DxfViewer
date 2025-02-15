@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Improved Web DXF Viewer – Enhanced MTEXT & HATCH Rendering</title>
+    <title>Improved Web DXF Viewer – Enhanced MTEXT &amp; HATCH Rendering</title>
     <style>
       /* Fullscreen canvas and toolbar styling */
       body {
@@ -554,7 +554,7 @@
       }
 
       // ─────────────────────────────────────────────────────────────
-      // DXF Entity Classes (Most remain unchanged)
+      // DXF Entity Classes
       // ─────────────────────────────────────────────────────────────
 
       class DXFLine extends DXFEntity {
@@ -804,7 +804,6 @@
       // Updated HATCH with Improved DXF/AutoCAD Compliance
       // ─────────────────────────────────────────────────────────────
 
-      // Helper functions for sampling arcs and ellipses
       function sampleArc(center, radius, startAngle, endAngle, numSegments = 20) {
         let points = [];
         for (let i = 0; i <= numSegments; i++) {
@@ -824,11 +823,10 @@
         }
         return points;
       }
-
       class DXFHatch extends DXFEntity {
         constructor() {
           super("HATCH");
-          this.boundaryLoops = []; // each loop is an array of {x,y}
+          this.boundaryLoops = [];
           this.isSolid = false;
           this.patternName = "";
         }
@@ -851,11 +849,9 @@
                 loopCount = parseInt(value, 10);
                 break;
               case "92": {
-                // Start of a boundary loop
                 let edgeCount = parseInt(value, 10);
                 let loopPoints = [];
                 for (let j = 0; j < edgeCount; j++) {
-                  // Expect a group code "72" indicating edge type
                   i += 2;
                   if (i >= lines.length) break;
                   let edgeTypeCode = lines[i - 2].trim();
@@ -863,7 +859,6 @@
                   let edgeType = (edgeTypeCode === "72") ? parseInt(edgeTypeVal, 10) : 1;
                   let edgePoints = [];
                   if (edgeType === 1) {
-                    // Line edge: expect group codes 10,20 for start and 11,21 for end
                     let start = { x: 0, y: 0 }, end = { x: 0, y: 0 };
                     while (i < lines.length) {
                       let c = lines[i].trim();
@@ -877,7 +872,6 @@
                     }
                     edgePoints = [start, end];
                   } else if (edgeType === 2) {
-                    // Circular arc edge: expect center (10,20), radius (40), start angle (50) and end angle (51)
                     let center = { x: 0, y: 0 }, radius = 0, startAngle = 0, endAngle = 0;
                     while (i < lines.length) {
                       let c = lines[i].trim();
@@ -893,7 +887,6 @@
                     if (endAngle < startAngle) endAngle += 2 * Math.PI;
                     edgePoints = sampleArc(center, radius, startAngle, endAngle);
                   } else if (edgeType === 3) {
-                    // Elliptical arc edge: expect center (10,20), major axis endpoint (11,21), ratio (40), start param (50) and end param (51)
                     let center = { x: 0, y: 0 }, majorVec = { x: 0, y: 0 }, ratio = 1, startParam = 0, endParam = 0;
                     while (i < lines.length) {
                       let c = lines[i].trim();
@@ -913,7 +906,6 @@
                     let rotation = Math.atan2(majorVec.y, majorVec.x);
                     edgePoints = sampleEllipse(center, majorLength, minorLength, rotation, startParam, endParam);
                   } else {
-                    // For unsupported edge types (e.g. spline), skip parameters.
                     while (i < lines.length) {
                       let c = lines[i].trim();
                       if (c === "0" || c === "92" || c === "93") break;
@@ -921,7 +913,6 @@
                     }
                     edgePoints = [];
                   }
-                  // Append edgePoints to the current loop (avoid duplicate connecting points)
                   if (loopPoints.length > 0 && edgePoints.length > 0) {
                     let last = loopPoints[loopPoints.length - 1];
                     let first = edgePoints[0];
@@ -988,6 +979,9 @@
         }
       }
 
+      // ─────────────────────────────────────────────────────────────
+      // Revised DXFDimension with improved scaling & layout rendering
+      // ─────────────────────────────────────────────────────────────
       class DXFDimension extends DXFEntity {
         constructor() {
           super("DIMENSION");
@@ -1035,26 +1029,40 @@
             ctx.globalAlpha = 1;
             return;
           }
+          // Unit vector along baseline and its perpendicular
           let u = { x: dx / baselineLength, y: dy / baselineLength };
           let v = { x: -u.y, y: u.x };
           let mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+          // Offset distance (if a definition point exists, use its perpendicular distance)
           let offsetDistance = 5;
           if (this.defPt) {
-            let mx = mid.x, my = mid.y;
-            offsetDistance = (this.defPt.x - mx) * v.x + (this.defPt.y - my) * v.y;
+            offsetDistance = ((this.defPt.x - mid.x) * v.x + (this.defPt.y - mid.y) * v.y);
           }
+          // Compute dimension line endpoints (in world coordinates)
           let p1_dim = { x: p1.x + v.x * offsetDistance, y: p1.y + v.y * offsetDistance };
           let p2_dim = { x: p2.x + v.x * offsetDistance, y: p2.y + v.y * offsetDistance };
+
+          // Draw extension lines and dimension line in world space
           ctx.beginPath();
           ctx.moveTo(p1.x, p1.y);
           ctx.lineTo(p1_dim.x, p1_dim.y);
           ctx.moveTo(p2.x, p2.y);
           ctx.lineTo(p2_dim.x, p2_dim.y);
+          ctx.stroke();
+
+          ctx.beginPath();
           ctx.moveTo(p1_dim.x, p1_dim.y);
           ctx.lineTo(p2_dim.x, p2_dim.y);
           ctx.stroke();
-          function drawArrow(pt, direction) {
-            const arrowSize = 3;
+
+          // Convert key points to screen coordinates for fixed–size arrowheads and text
+          let screenP1_dim = viewport.worldToScreen(p1_dim.x, p1_dim.y);
+          let screenP2_dim = viewport.worldToScreen(p2_dim.x, p2_dim.y);
+          let screenMid = viewport.worldToScreen((p1_dim.x + p2_dim.x) / 2, (p1_dim.y + p2_dim.y) / 2);
+
+          // Draw arrowheads and text with fixed (paper–space) sizes
+          function drawArrow(ctx, pt, direction) {
+            const arrowSize = 10; // pixels
             const arrowAngle = Math.PI / 6;
             let leftAngle = Math.atan2(direction.y, direction.x) + arrowAngle;
             let rightAngle = Math.atan2(direction.y, direction.x) - arrowAngle;
@@ -1067,26 +1075,33 @@
             ctx.closePath();
             ctx.fill();
           }
-          let arrowDir = { x: p2_dim.x - p1_dim.x, y: p2_dim.y - p1_dim.y };
-          let arrowLen = Math.sqrt(arrowDir.x * arrowDir.x + arrowDir.y * arrowDir.y);
-          if (arrowLen > 1e-9) {
-            arrowDir.x /= arrowLen; arrowDir.y /= arrowLen;
-            drawArrow(p1_dim, arrowDir);
-            drawArrow(p2_dim, { x: -arrowDir.x, y: -arrowDir.y });
+          // Compute arrow direction in screen space
+          let screenDir = { x: screenP2_dim.x - screenP1_dim.x, y: screenP2_dim.y - screenP1_dim.y };
+          let screenArrowLen = Math.sqrt(screenDir.x * screenDir.x + screenDir.y * screenDir.y);
+          if (screenArrowLen > 1e-9) {
+            screenDir.x /= screenArrowLen;
+            screenDir.y /= screenArrowLen;
+          } else {
+            screenDir = { x: 1, y: 0 };
           }
+          ctx.save();
+          ctx.setTransform(1, 0, 0, 1, 0, 0); // reset to screen space
+          ctx.fillStyle = this.getColor(dxfDoc);
+          drawArrow(ctx, screenP1_dim, screenDir);
+          drawArrow(ctx, screenP2_dim, { x: -screenDir.x, y: -screenDir.y });
+          // Draw dimension text with fixed 12px font
           let dimText = this.text.trim();
           if (!dimText || dimText === "<>") {
             dimText = baselineLength.toFixed(2);
           }
-          let dimLineMid = { x: (p1_dim.x + p2_dim.x) / 2, y: (p1_dim.y + p2_dim.y) / 2 };
-          let angle = Math.atan2(u.y, u.x);
-          if (angle > Math.PI / 2 || angle < -Math.PI / 2) angle += Math.PI;
-          ctx.save();
-          ctx.translate(dimLineMid.x, dimLineMid.y);
-          ctx.rotate(angle);
           ctx.font = "12px sans-serif";
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
+          ctx.fillStyle = this.getColor(dxfDoc);
+          // Compute the angle of the dimension line in screen space
+          let screenAngle = Math.atan2(screenP2_dim.y - screenP1_dim.y, screenP2_dim.x - screenP1_dim.x);
+          ctx.translate(screenMid.x, screenMid.y);
+          ctx.rotate(screenAngle);
           ctx.fillText(dimText, 0, 0);
           ctx.restore();
           ctx.globalAlpha = 1;
