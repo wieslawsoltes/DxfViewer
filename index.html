@@ -2,23 +2,26 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Web DXF Viewer</title>
+  <title>Advanced Web DXF Viewer</title>
   <style>
-    /* Basic styling for full‐screen canvas and toolbar */
+    /* Fullscreen canvas and simple toolbar styling */
     body {
       margin: 0;
       overflow: hidden;
       font-family: sans-serif;
+      user-select: none;
+      -webkit-user-select: none;
+      -ms-user-select: none;
     }
     #toolbar {
       position: absolute;
       top: 10px;
       left: 10px;
       z-index: 10;
-      background: rgba(255, 255, 255, 0.9);
+      background: rgba(255, 255, 255, 0.95);
       padding: 10px;
       border-radius: 4px;
-      box-shadow: 0 0 4px rgba(0, 0, 0, 0.2);
+      box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);
     }
     #toolbar button,
     #toolbar input {
@@ -26,6 +29,7 @@
     }
     canvas {
       display: block;
+      touch-action: none; /* disable default gestures */
     }
   </style>
 </head>
@@ -36,53 +40,51 @@
     </div>
     <div>
       <button id="resetView">Reset View</button>
-    </div>
-    <div>
       <button id="toggleGrid">Toggle Grid</button>
     </div>
     <div style="margin-top:8px;">
-      <small>Use mouse wheel to zoom and drag to pan.</small>
+      <small>Mouse or touch: drag to pan, wheel or pinch to zoom.</small>
     </div>
   </div>
   <canvas id="canvas"></canvas>
   <script>
-    // Global variables
+    // Global variables and view state
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
-    let drawing = null; // will hold the parsed DXF data
+    let dxf = { entities: [], blocks: {} }; // parsed DXF data
     let baseScale = 1, baseOffsetX = 0, baseOffsetY = 0;
     let viewScale = 1, viewOffsetX = 0, viewOffsetY = 0;
     let gridEnabled = true;
-
-    // Variables for panning
     let isPanning = false;
-    let startPan = { x: 0, y: 0 };
+    let lastPanPoint = { x: 0, y: 0 };
 
-    // Resize canvas to full window size
+    // Touch state
+    let ongoingTouches = [];
+    let lastTouchDistance = null;
+    let lastTouchCenter = null;
+
+    // Resize canvas to fill the window
     function resizeCanvas() {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
-      // if a drawing is loaded, recompute initial transform
-      if (drawing && drawing.entities && drawing.entities.length) {
+      if (dxf.entities.length > 0) {
         setInitialView();
-        draw();
-      } else {
-        draw(); // just clear canvas
       }
+      draw();
     }
     window.addEventListener("resize", resizeCanvas);
     resizeCanvas();
 
-    // File input handler
+    // --- File Loading and Parsing ---
     document.getElementById("dxfFile").addEventListener("change", function (e) {
       const file = e.target.files[0];
       if (!file) return;
       const reader = new FileReader();
       reader.onload = function (event) {
         const text = event.target.result;
-        drawing = parseDXF(text);
-        if (drawing.entities.length === 0) {
-          alert("No entities found in DXF or unsupported format.");
+        dxf = parseDXF(text);
+        if (dxf.entities.length === 0 && Object.keys(dxf.blocks).length === 0) {
+          alert("No supported entities found in DXF.");
           return;
         }
         setInitialView();
@@ -105,16 +107,16 @@
       draw();
     });
 
-    // Mouse events for panning
-    canvas.addEventListener("mousedown", function (e) {
+    // --- Mouse Pan & Zoom ---
+    canvas.addEventListener("mousedown", (e) => {
       isPanning = true;
-      startPan = { x: e.clientX, y: e.clientY };
+      lastPanPoint = { x: e.clientX, y: e.clientY };
     });
-    canvas.addEventListener("mousemove", function (e) {
+    canvas.addEventListener("mousemove", (e) => {
       if (isPanning) {
-        const dx = e.clientX - startPan.x;
-        const dy = e.clientY - startPan.y;
-        startPan = { x: e.clientX, y: e.clientY };
+        const dx = e.clientX - lastPanPoint.x;
+        const dy = e.clientY - lastPanPoint.y;
+        lastPanPoint = { x: e.clientX, y: e.clientY };
         viewOffsetX += dx;
         viewOffsetY += dy;
         draw();
@@ -122,159 +124,412 @@
     });
     canvas.addEventListener("mouseup", () => (isPanning = false));
     canvas.addEventListener("mouseleave", () => (isPanning = false));
-
-    // Wheel event for zooming (zoom relative to mouse pointer)
     canvas.addEventListener("wheel", function (e) {
       e.preventDefault();
       const zoomIntensity = 0.001;
       const delta = e.deltaY;
       const factor = 1 - delta * zoomIntensity;
-      // Get mouse position relative to canvas
+      // Zoom relative to mouse pointer
       const mouseX = e.clientX;
       const mouseY = e.clientY;
-      // Adjust offset so that zoom is centered on mouse pointer
       viewOffsetX = mouseX - factor * (mouseX - viewOffsetX);
       viewOffsetY = mouseY - factor * (mouseY - viewOffsetY);
       viewScale *= factor;
       draw();
     });
 
-    // --- DXF Parsing ---------------------------------------------------
-    // A simple DXF parser that:
-    // • finds the ENTITIES section,
-    // • reads entities (starting with group code "0") and
-    // • supports LINE, CIRCLE, and ARC.
-    function parseDXF(text) {
-      const lines = text.split(/\r\n|\n/);
-      let i = 0;
-      let entities = [];
-      // Find the ENTITIES section
-      while (i < lines.length) {
-        if (lines[i].trim() === "0" && lines[i + 1] && lines[i + 1].trim() === "SECTION") {
-          i += 2;
-          if (lines[i].trim() === "2" && lines[i + 1] && lines[i + 1].trim() === "ENTITIES") {
-            i += 2; // skip the "2" and "ENTITIES" lines
-            break;
-          }
-        }
-        i++;
-      }
-      // Parse entities until ENDSEC
-      while (i < lines.length) {
-        const code = lines[i].trim();
-        const value = lines[i + 1] ? lines[i + 1].trim() : "";
-        if (code === "0" && value === "ENDSEC") {
-          break;
-        }
-        if (code === "0") {
-          // New entity starts here
-          const entityType = value;
-          let entity = { type: entityType };
-          i += 2;
-          // Read entity properties until the next entity (code "0") or end of section
-          while (i < lines.length) {
-            const nextCode = lines[i].trim();
-            if (nextCode === "0") break;
-            const nextValue = lines[i + 1] ? lines[i + 1].trim() : "";
-            // For simplicity, store property by its code. (Extend as needed.)
-            entity[nextCode] = nextValue;
-            i += 2;
-          }
-          // Only add supported entities
-          if (["LINE", "CIRCLE", "ARC"].includes(entityType)) {
-            entities.push(entity);
-          }
-        } else {
-          i += 2;
-        }
-      }
-      return { entities: entities };
+    // --- Touch Pan and Pinch Zoom ---
+    canvas.addEventListener("touchstart", handleTouchStart, {passive: false});
+    canvas.addEventListener("touchmove", handleTouchMove, {passive: false});
+    canvas.addEventListener("touchend", handleTouchEnd, {passive: false});
+    canvas.addEventListener("touchcancel", handleTouchEnd, {passive: false});
+
+    function getTouchPos(touchEvent) {
+      const rect = canvas.getBoundingClientRect();
+      return Array.from(touchEvent.touches).map(touch => ({
+        x: touch.clientX - rect.left,
+        y: touch.clientY - rect.top
+      }));
     }
 
-    // --- Compute Bounding Box and Initial Transform --------------------
-    // Computes the drawing’s bounding box and sets an initial scale and offset
-    // so that the drawing fits nicely inside the canvas.
-    function setInitialView() {
-      if (!drawing || !drawing.entities.length) return;
-      let minX = Infinity,
-        minY = Infinity,
-        maxX = -Infinity,
-        maxY = -Infinity;
-      drawing.entities.forEach((entity) => {
-        if (entity.type === "LINE") {
-          const x1 = parseFloat(entity["10"]);
-          const y1 = parseFloat(entity["20"]);
-          const x2 = parseFloat(entity["11"]);
-          const y2 = parseFloat(entity["21"]);
-          minX = Math.min(minX, x1, x2);
-          minY = Math.min(minY, y1, y2);
-          maxX = Math.max(maxX, x1, x2);
-          maxY = Math.max(maxY, y1, y2);
-        } else if (entity.type === "CIRCLE") {
-          const cx = parseFloat(entity["10"]);
-          const cy = parseFloat(entity["20"]);
-          const r = parseFloat(entity["40"]);
-          minX = Math.min(minX, cx - r);
-          minY = Math.min(minY, cy - r);
-          maxX = Math.max(maxX, cx + r);
-          maxY = Math.max(maxY, cy + r);
-        } else if (entity.type === "ARC") {
-          // For simplicity, include the full circle’s bounds.
-          const cx = parseFloat(entity["10"]);
-          const cy = parseFloat(entity["20"]);
-          const r = parseFloat(entity["40"]);
-          minX = Math.min(minX, cx - r);
-          minY = Math.min(minY, cy - r);
-          maxX = Math.max(maxX, cx + r);
-          maxY = Math.max(maxY, cy + r);
+    function handleTouchStart(evt) {
+      evt.preventDefault();
+      const touches = getTouchPos(evt);
+      ongoingTouches = touches;
+      if (touches.length === 2) {
+        lastTouchDistance = getDistance(touches[0], touches[1]);
+        lastTouchCenter = getCenter(touches[0], touches[1]);
+      } else if (touches.length === 1) {
+        lastPanPoint = touches[0];
+      }
+    }
+
+    function handleTouchMove(evt) {
+      evt.preventDefault();
+      const touches = getTouchPos(evt);
+      if (touches.length === 2 && ongoingTouches.length >= 2) {
+        // Pinch zoom
+        const newDistance = getDistance(touches[0], touches[1]);
+        const factor = newDistance / lastTouchDistance;
+        const newCenter = getCenter(touches[0], touches[1]);
+        // Adjust zoom relative to the center of the pinch
+        viewOffsetX = newCenter.x - factor * (newCenter.x - viewOffsetX);
+        viewOffsetY = newCenter.y - factor * (newCenter.y - viewOffsetY);
+        viewScale *= factor;
+        lastTouchDistance = newDistance;
+        lastTouchCenter = newCenter;
+      } else if (touches.length === 1 && ongoingTouches.length === 1) {
+        // Single finger pan
+        const dx = touches[0].x - lastPanPoint.x;
+        const dy = touches[0].y - lastPanPoint.y;
+        viewOffsetX += dx;
+        viewOffsetY += dy;
+        lastPanPoint = touches[0];
+      }
+      ongoingTouches = touches;
+      draw();
+    }
+
+    function handleTouchEnd(evt) {
+      evt.preventDefault();
+      const touches = getTouchPos(evt);
+      ongoingTouches = touches;
+      if (touches.length < 2) {
+        lastTouchDistance = null;
+        lastTouchCenter = null;
+      }
+      if (touches.length === 0) {
+        isPanning = false;
+      }
+    }
+
+    function getDistance(p1, p2) {
+      const dx = p2.x - p1.x;
+      const dy = p2.y - p1.y;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+    function getCenter(p1, p2) {
+      return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+    }
+
+    // --- DXF Parsing ---
+    // This simplified parser looks for SECTION markers and supports the ENTITIES and BLOCKS sections.
+    // It supports LINE, CIRCLE, ARC, POLYLINE (and its vertices via VERTEX/SEQEND),
+    // LWPOLYLINE, TEXT/MTEXT, INSERT (with attached ATTRIBs).
+    function parseDXF(text) {
+      const lines = text.split(/\r\n|\n/);
+      const dxf = { entities: [], blocks: {} };
+      let i = 0;
+      let currentSection = null;
+
+      while (i < lines.length) {
+        let code = lines[i].trim();
+        let value = lines[i + 1] ? lines[i + 1].trim() : "";
+        if (code === "0" && value === "SECTION") {
+          i += 2;
+          if (lines[i].trim() === "2") {
+            const sectionName = lines[i + 1].trim();
+            currentSection = sectionName;
+            i += 2;
+            if (sectionName === "BLOCKS") {
+              // Parse BLOCKS section
+              while (i < lines.length) {
+                code = lines[i].trim();
+                value = lines[i + 1] ? lines[i + 1].trim() : "";
+                if (code === "0" && value === "ENDSEC") {
+                  i += 2;
+                  break;
+                }
+                if (code === "0" && value === "BLOCK") {
+                  const block = { name: "", basePoint: { x: 0, y: 0 }, entities: [] };
+                  i += 2;
+                  // Read block header properties until first entity (type "LINE", etc.) or ENDBLK
+                  while (i < lines.length) {
+                    code = lines[i].trim();
+                    value = lines[i + 1] ? lines[i + 1].trim() : "";
+                    if (code === "0" && (value === "ENDBLK" || value === "LINE" || value === "CIRCLE" || value === "ARC" || value === "LWPOLYLINE" || value === "POLYLINE" || value === "TEXT" || value === "MTEXT")) {
+                      break;
+                    }
+                    if (code === "2") {
+                      block.name = value;
+                    } else if (code === "10") {
+                      block.basePoint.x = parseFloat(value);
+                    } else if (code === "20") {
+                      block.basePoint.y = parseFloat(value);
+                    }
+                    i += 2;
+                  }
+                  // Now parse block entities until ENDBLK
+                  while (i < lines.length) {
+                    code = lines[i].trim();
+                    value = lines[i + 1] ? lines[i + 1].trim() : "";
+                    if (code === "0" && value === "ENDBLK") {
+                      i += 2;
+                      break;
+                    }
+                    if (code === "0") {
+                      const result = parseEntity(lines, i);
+                      if (result) {
+                        block.entities.push(result.entity);
+                        i = result.nextIndex;
+                        continue;
+                      }
+                    }
+                    i += 2;
+                  }
+                  dxf.blocks[block.name] = block;
+                  continue;
+                }
+                i += 2;
+              }
+            } else if (sectionName === "ENTITIES") {
+              // Parse ENTITIES section
+              while (i < lines.length) {
+                code = lines[i].trim();
+                value = lines[i + 1] ? lines[i + 1].trim() : "";
+                if (code === "0" && value === "ENDSEC") {
+                  i += 2;
+                  break;
+                }
+                if (code === "0") {
+                  const result = parseEntity(lines, i);
+                  if (result) {
+                    const entity = result.entity;
+                    i = result.nextIndex;
+                    // If an INSERT is encountered, attach following ATTRIBs
+                    if (entity.type === "INSERT") {
+                      entity.attribs = [];
+                      while (i < lines.length) {
+                        let codePeek = lines[i].trim();
+                        let valuePeek = lines[i + 1] ? lines[i + 1].trim() : "";
+                        if (codePeek === "0" && valuePeek === "ATTRIB") {
+                          const attribResult = parseEntity(lines, i);
+                          if (attribResult) {
+                            entity.attribs.push(attribResult.entity);
+                            i = attribResult.nextIndex;
+                            continue;
+                          }
+                        }
+                        break;
+                      }
+                    }
+                    dxf.entities.push(entity);
+                    continue;
+                  }
+                }
+                i += 2;
+              }
+            } else {
+              // Skip any other section
+              while (i < lines.length) {
+                code = lines[i].trim();
+                value = lines[i + 1] ? lines[i + 1].trim() : "";
+                if (code === "0" && value === "ENDSEC") {
+                  i += 2;
+                  break;
+                }
+                i += 2;
+              }
+            }
+            continue;
+          }
         }
-      });
-      // Compute scale factors (leave a margin by using 90% of available space)
+        i += 2;
+      }
+      return dxf;
+    }
+
+    // Parses an individual DXF entity starting at index i.
+    // Special handling is provided for POLYLINE (which may contain VERTEX entities)
+    // and LWPOLYLINE (which has embedded vertices).
+    function parseEntity(lines, i) {
+      if (i >= lines.length) return null;
+      let code = lines[i].trim();
+      let value = lines[i + 1] ? lines[i + 1].trim() : "";
+      if (code !== "0") return null;
+      const entity = { type: value };
+      i += 2;
+
+      if (entity.type === "POLYLINE") {
+        entity.vertices = [];
+        // Read header properties until encountering VERTEX or SEQEND
+        while (i < lines.length) {
+          code = lines[i].trim();
+          value = lines[i + 1] ? lines[i + 1].trim() : "";
+          if (code === "0" && (value === "VERTEX" || value === "SEQEND")) break;
+          entity[code] = value;
+          i += 2;
+        }
+        // Read vertices
+        while (i < lines.length) {
+          code = lines[i].trim();
+          value = lines[i + 1] ? lines[i + 1].trim() : "";
+          if (code === "0" && value === "VERTEX") {
+            let vertex = {};
+            i += 2;
+            while (i < lines.length) {
+              let vCode = lines[i].trim();
+              let vValue = lines[i + 1] ? lines[i + 1].trim() : "";
+              if (vCode === "0") break;
+              if (vCode === "10") vertex.x = parseFloat(vValue);
+              else if (vCode === "20") vertex.y = parseFloat(vValue);
+              i += 2;
+            }
+            entity.vertices.push(vertex);
+            continue;
+          } else if (code === "0" && value === "SEQEND") {
+            i += 2;
+            break;
+          } else {
+            i += 2;
+          }
+        }
+        return { entity, nextIndex: i };
+      } else if (entity.type === "LWPOLYLINE") {
+        entity.vertices = [];
+        // LWPOLYLINE header: some properties may be present
+        while (i < lines.length) {
+          code = lines[i].trim();
+          value = lines[i + 1] ? lines[i + 1].trim() : "";
+          // Vertices come as repeating 10 and 20 codes.
+          if (code === "10") {
+            let vertex = { x: parseFloat(value) };
+            i += 2;
+            if (i < lines.length && lines[i].trim() === "20") {
+              vertex.y = parseFloat(lines[i + 1].trim());
+              i += 2;
+            }
+            entity.vertices.push(vertex);
+          } else if (code === "0") {
+            break;
+          } else {
+            entity[code] = value;
+            i += 2;
+          }
+        }
+        return { entity, nextIndex: i };
+      } else {
+        // For all other entities, read until the next "0" marker.
+        while (i < lines.length) {
+          code = lines[i].trim();
+          if (code === "0") break;
+          value = lines[i + 1] ? lines[i + 1].trim() : "";
+          entity[code] = value;
+          i += 2;
+        }
+        return { entity, nextIndex: i };
+      }
+    }
+
+    // --- Compute Initial View ---
+    // Computes the overall drawing bounding box (based on common entities)
+    // and sets the base scale/offset so that the drawing fits the canvas.
+    function setInitialView() {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+      function considerPoint(x, y) {
+        if (isNaN(x) || isNaN(y)) return;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+
+      // Process a single entity
+      function processEntity(entity) {
+        switch (entity.type) {
+          case "LINE":
+            considerPoint(parseFloat(entity["10"]), parseFloat(entity["20"]));
+            considerPoint(parseFloat(entity["11"]), parseFloat(entity["21"]));
+            break;
+          case "CIRCLE":
+            {
+              const cx = parseFloat(entity["10"]);
+              const cy = parseFloat(entity["20"]);
+              const r = parseFloat(entity["40"]);
+              considerPoint(cx - r, cy - r);
+              considerPoint(cx + r, cy + r);
+            }
+            break;
+          case "ARC":
+            {
+              const cx = parseFloat(entity["10"]);
+              const cy = parseFloat(entity["20"]);
+              const r = parseFloat(entity["40"]);
+              considerPoint(cx - r, cy - r);
+              considerPoint(cx + r, cy + r);
+            }
+            break;
+          case "POLYLINE":
+          case "LWPOLYLINE":
+            if (entity.vertices) {
+              entity.vertices.forEach(v => {
+                considerPoint(v.x, v.y);
+              });
+            }
+            break;
+          case "TEXT":
+          case "MTEXT":
+          case "ATTRIB":
+            considerPoint(parseFloat(entity["10"]), parseFloat(entity["20"]));
+            break;
+          case "INSERT":
+            // For an insert, approximate by its insertion point.
+            considerPoint(parseFloat(entity["10"]), parseFloat(entity["20"]));
+            break;
+        }
+      }
+
+      // Process all top-level entities.
+      dxf.entities.forEach(processEntity);
+      // Also process block definitions (their contents are drawn relative to their base point).
+      for (let name in dxf.blocks) {
+        const block = dxf.blocks[name];
+        considerPoint(block.basePoint.x, block.basePoint.y);
+        if (block.entities) {
+          block.entities.forEach(processEntity);
+        }
+      }
+      // Fallback if no entities found
+      if (minX === Infinity) { minX = -100; minY = -100; maxX = 100; maxY = 100; }
+
       const drawingWidth = maxX - minX;
       const drawingHeight = maxY - minY;
       const scaleX = canvas.width / drawingWidth;
       const scaleY = canvas.height / drawingHeight;
       baseScale = 0.9 * Math.min(scaleX, scaleY);
-      // Center of drawing
       const centerX = (minX + maxX) / 2;
       const centerY = (minY + maxY) / 2;
-      // We will use a transform that maps (x, y) to:
-      //   (viewOffsetX + viewScale*x, viewOffsetY - viewScale*y)
-      // (note the minus sign to flip the Y-axis, as DXF’s Y increases upward)
       baseOffsetX = canvas.width / 2 - baseScale * centerX;
       baseOffsetY = canvas.height / 2 + baseScale * centerY;
-      // Set current view to base view
       viewScale = baseScale;
       viewOffsetX = baseOffsetX;
       viewOffsetY = baseOffsetY;
     }
 
-    // --- Drawing Functions ---------------------------------------------
+    // --- Drawing Functions ---
     function draw() {
-      // Clear the canvas
+      // Clear the canvas.
       ctx.save();
-      ctx.setTransform(1, 0, 0, 1, 0, 0); // reset transform
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.restore();
 
-      // Set transform: scale and flip y axis
+      // Set the world transform.
       ctx.setTransform(viewScale, 0, 0, -viewScale, viewOffsetX, viewOffsetY);
 
-      // Optionally draw a grid (drawn in world coordinates)
+      // Optionally draw a grid.
       if (gridEnabled) drawGrid();
 
-      // Draw each DXF entity
-      if (drawing && drawing.entities) {
-        drawing.entities.forEach((entity) => {
-          drawEntity(entity);
-        });
-      }
+      // Draw all top-level entities.
+      dxf.entities.forEach(entity => {
+        drawEntity(entity);
+      });
     }
 
-    // Draw a simple grid in the DXF coordinate space
+    // Draw a grid in world coordinates.
     function drawGrid() {
-      const gridSpacing = 10; // change as needed
-      // Determine grid bounds (in world coordinates) from canvas corners
+      const gridSpacing = 10;
       const invScale = 1 / viewScale;
       const topLeft = screenToWorld(0, 0);
       const bottomRight = screenToWorld(canvas.width, canvas.height);
@@ -298,38 +553,126 @@
       ctx.restore();
     }
 
-    // Draw an individual DXF entity
+    // Convert screen (pixel) coordinates to world coordinates.
+    function screenToWorld(sx, sy) {
+      const x = (sx - viewOffsetX) / viewScale;
+      const y = -(sy - viewOffsetY) / viewScale;
+      return { x, y };
+    }
+
+    // Draw an individual DXF entity.
+    // For entities that are “inserted” via a block, we use canvas transforms to apply
+    // the block transformation.
     function drawEntity(entity) {
       ctx.save();
       ctx.lineWidth = 1 / viewScale;
       ctx.strokeStyle = "#000";
       ctx.fillStyle = "#000";
 
-      if (entity.type === "LINE") {
-        const x1 = parseFloat(entity["10"]);
-        const y1 = parseFloat(entity["20"]);
-        const x2 = parseFloat(entity["11"]);
-        const y2 = parseFloat(entity["21"]);
-        ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.stroke();
-      } else if (entity.type === "CIRCLE") {
-        const cx = parseFloat(entity["10"]);
-        const cy = parseFloat(entity["20"]);
-        const r = parseFloat(entity["40"]);
-        ctx.beginPath();
-        ctx.arc(cx, cy, r, 0, 2 * Math.PI);
-        ctx.stroke();
-      } else if (entity.type === "ARC") {
-        const cx = parseFloat(entity["10"]);
-        const cy = parseFloat(entity["20"]);
-        const r = parseFloat(entity["40"]);
-        const startAngle = degToRad(parseFloat(entity["50"] || "0"));
-        const endAngle = degToRad(parseFloat(entity["51"] || "0"));
-        ctx.beginPath();
-        ctx.arc(cx, cy, r, startAngle, endAngle);
-        ctx.stroke();
+      switch (entity.type) {
+        case "LINE":
+          {
+            const x1 = parseFloat(entity["10"]);
+            const y1 = parseFloat(entity["20"]);
+            const x2 = parseFloat(entity["11"]);
+            const y2 = parseFloat(entity["21"]);
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+          }
+          break;
+        case "CIRCLE":
+          {
+            const cx = parseFloat(entity["10"]);
+            const cy = parseFloat(entity["20"]);
+            const r = parseFloat(entity["40"]);
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+            ctx.stroke();
+          }
+          break;
+        case "ARC":
+          {
+            const cx = parseFloat(entity["10"]);
+            const cy = parseFloat(entity["20"]);
+            const r = parseFloat(entity["40"]);
+            const startAngle = degToRad(parseFloat(entity["50"] || "0"));
+            const endAngle = degToRad(parseFloat(entity["51"] || "0"));
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, startAngle, endAngle);
+            ctx.stroke();
+          }
+          break;
+        case "POLYLINE":
+        case "LWPOLYLINE":
+          {
+            if (entity.vertices && entity.vertices.length > 0) {
+              ctx.beginPath();
+              ctx.moveTo(entity.vertices[0].x, entity.vertices[0].y);
+              for (let i = 1; i < entity.vertices.length; i++) {
+                ctx.lineTo(entity.vertices[i].x, entity.vertices[i].y);
+              }
+              // If flag for closed polyline is set (group code 70 bit 1), close the path.
+              if (entity["70"] && (parseInt(entity["70"]) & 1)) {
+                ctx.closePath();
+              }
+              ctx.stroke();
+            }
+          }
+          break;
+        case "TEXT":
+        case "MTEXT":
+        case "ATTRIB":
+          {
+            const x = parseFloat(entity["10"]);
+            const y = parseFloat(entity["20"]);
+            const height = entity["40"] ? parseFloat(entity["40"]) : 12;
+            const rotation = entity["50"] ? degToRad(parseFloat(entity["50"])) : 0;
+            const text = entity["1"] || "";
+            ctx.save();
+            ctx.translate(x, y);
+            // Because our world Y is flipped, we rotate in the opposite direction.
+            ctx.rotate(-rotation);
+            ctx.font = `${height}px sans-serif`;
+            // Draw text with the baseline in the middle.
+            ctx.textBaseline = "middle";
+            ctx.fillText(text, 0, 0);
+            ctx.restore();
+          }
+          break;
+        case "INSERT":
+          {
+            // Look up the block definition.
+            const blockName = entity["2"];
+            const block = dxf.blocks[blockName];
+            if (block) {
+              ctx.save();
+              // Get INSERT parameters.
+              const insX = parseFloat(entity["10"]) || 0;
+              const insY = parseFloat(entity["20"]) || 0;
+              const scaleX = entity["41"] ? parseFloat(entity["41"]) : 1;
+              const scaleY = entity["42"] ? parseFloat(entity["42"]) : 1;
+              const rotation = entity["50"] ? degToRad(parseFloat(entity["50"])) : 0;
+              const bp = block.basePoint || { x: 0, y: 0 };
+              // Apply transformation: translate to insertion point, rotate, scale, then offset by block base.
+              ctx.translate(insX, insY);
+              ctx.rotate(rotation);
+              ctx.scale(scaleX, scaleY);
+              ctx.translate(-bp.x, -bp.y);
+              // Draw each entity in the block.
+              block.entities.forEach(be => drawEntity(be));
+              // If the INSERT has attached ATTRIBs, draw them.
+              if (entity.attribs) {
+                entity.attribs.forEach(attr => drawEntity(attr));
+              }
+              ctx.restore();
+            }
+          }
+          break;
+        default:
+          // Unsupported entity types are simply ignored.
+          break;
       }
       ctx.restore();
     }
@@ -339,15 +682,7 @@
       return (deg * Math.PI) / 180;
     }
 
-    // Convert screen (pixel) coordinates to world (DXF) coordinates.
-    function screenToWorld(sx, sy) {
-      // Inverse of: (x, y) -> (viewOffsetX + viewScale*x, viewOffsetY - viewScale*y)
-      const x = (sx - viewOffsetX) / viewScale;
-      const y = -(sy - viewOffsetY) / viewScale;
-      return { x: x, y: y };
-    }
-
-    // Initial draw (empty scene)
+    // Initial draw.
     draw();
   </script>
 </body>
