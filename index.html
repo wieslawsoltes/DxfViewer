@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Improved Web DXF Viewer – with Key Fixes</title>
+    <title>Improved Web DXF Viewer – with Split Options Popup</title>
     <style>
       /* Fullscreen canvas and toolbar styling */
       body {
@@ -15,7 +15,7 @@
         position: absolute;
         top: 10px;
         left: 10px;
-        z-index: 110; /* above canvas but below the overlay when open */
+        z-index: 110; /* above canvas but below overlays */
         background: rgba(255, 255, 255, 0.95);
         padding: 10px;
         border-radius: 4px;
@@ -25,8 +25,8 @@
       #toolbar input {
         margin: 4px 0;
       }
-      /* Overlay for modal popup */
-      #optionsOverlay {
+      /* Common overlay styling for modal popups */
+      .optionsOverlay {
         display: none;
         position: fixed;
         top: 0;
@@ -36,8 +36,8 @@
         background: rgba(0, 0, 0, 0.3);
         z-index: 200;
       }
-      /* Styling for the rendering options popup */
-      #renderOptions {
+      /* Common styling for popup content */
+      .popupContent {
         position: absolute;
         top: 50px;
         left: 10px;
@@ -47,9 +47,6 @@
         box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);
         max-height: 400px;
         overflow-y: auto;
-      }
-      #renderOptions label {
-        font-size: 14px;
       }
       canvas {
         display: block;
@@ -67,16 +64,23 @@
         <button id="toggleGrid">Toggle Grid</button>
       </div>
       <div style="margin-top:8px;">
-        <button id="toggleRenderOptions">Rendering Options</button>
+        <!-- New separate buttons for each popup -->
+        <button id="toggleEntityOptions">Entity Options</button>
+        <button id="toggleOtherOptions">Other Options</button>
       </div>
       <div style="margin-top:8px;">
         <small>Pan with mouse/touch; wheel or pinch to zoom.</small>
       </div>
     </div>
-    <!-- The overlay that contains the rendering options popup -->
-    <div id="optionsOverlay">
-      <div id="renderOptions">
+
+    <!-- Overlay for Entity Options Popup -->
+    <div id="entityOptionsOverlay" class="optionsOverlay">
+      <div id="entityOptionsPopup" class="popupContent">
         <div><strong>Entity Types</strong></div>
+        <div style="margin:8px 0;">
+          <button id="selectAllEntities">Select All</button>
+          <button id="deselectAllEntities">Select None</button>
+        </div>
         <label>
           <input type="checkbox" class="entity-toggle" data-type="LINE" checked /> LINE
         </label><br />
@@ -122,14 +126,17 @@
         <label>
           <input type="checkbox" class="entity-toggle" data-type="SOLID" checked /> SOLID
         </label><br />
+      </div>
+    </div>
 
-        <div style="margin-top:10px;"><strong>Rendering Options</strong></div>
+    <!-- Overlay for Other Rendering Options Popup -->
+    <div id="otherOptionsOverlay" class="optionsOverlay">
+      <div id="otherOptionsPopup" class="popupContent">
+        <div><strong>Rendering Options</strong></div>
         <label>
           <input type="checkbox" id="toggleLinetype" /> Disable Linetype Rendering
         </label><br />
-        <label>
-          <input type="checkbox" id="toggleHatch" /> Disable Hatch Rendering
-        </label><br />
+        <!-- Hatch option removed since it is redundant with HATCH entity -->
         <label>
           <input type="checkbox" id="toggleColor" /> Disable Color Rendering
         </label><br />
@@ -144,6 +151,7 @@
         </label><br />
       </div>
     </div>
+
     <canvas id="canvas"></canvas>
 
     <script>
@@ -169,7 +177,6 @@
           SOLID: true
         },
         renderLinetype: true,
-        renderHatch: true,
         renderColor: true,
         renderThickness: true,
         renderWidth: true,
@@ -2253,18 +2260,28 @@
       document.getElementById("resetView").addEventListener("click",()=> viewer.resetView());
       document.getElementById("toggleGrid").addEventListener("click",()=> viewer.toggleGrid());
 
-      const optionsOverlay=document.getElementById("optionsOverlay");
-      const renderOptions=document.getElementById("renderOptions");
-      document.getElementById("toggleRenderOptions").addEventListener("click",()=>{
-        optionsOverlay.style.display="block";
+      document.getElementById("toggleEntityOptions").addEventListener("click", () => {
+        document.getElementById("entityOptionsOverlay").style.display = "block";
       });
-      optionsOverlay.addEventListener("click",(e)=>{
-        if (e.target===optionsOverlay) {
-          optionsOverlay.style.display="none";
+      document.getElementById("toggleOtherOptions").addEventListener("click", () => {
+        document.getElementById("otherOptionsOverlay").style.display = "block";
+      });
+
+      // Close overlay when clicking outside popup content
+      document.getElementById("entityOptionsOverlay").addEventListener("click", (e) => {
+        if (e.target === document.getElementById("entityOptionsOverlay")) {
+          document.getElementById("entityOptionsOverlay").style.display = "none";
         }
       });
-      renderOptions.addEventListener("click",e=> e.stopPropagation());
-
+      document.getElementById("otherOptionsOverlay").addEventListener("click", (e) => {
+        if (e.target === document.getElementById("otherOptionsOverlay")) {
+          document.getElementById("otherOptionsOverlay").style.display = "none";
+        }
+      });
+      // Prevent clicks inside popup from closing overlay
+      document.getElementById("entityOptionsPopup").addEventListener("click", e => e.stopPropagation());
+      document.getElementById("otherOptionsPopup").addEventListener("click", e => e.stopPropagation());
+      
       // entity toggles
       document.querySelectorAll(".entity-toggle").forEach(checkbox=>{
         checkbox.addEventListener("change",function(e){
@@ -2273,13 +2290,28 @@
           viewer.draw();
         });
       });
+      
+      // "Select All" and "Select None" buttons for entities
+      document.getElementById("selectAllEntities").addEventListener("click", () => {
+        document.querySelectorAll(".entity-toggle").forEach(cb => {
+          cb.checked = true;
+          const type = cb.getAttribute("data-type");
+          renderSettings.entity[type] = true;
+        });
+        viewer.draw();
+      });
+      document.getElementById("deselectAllEntities").addEventListener("click", () => {
+        document.querySelectorAll(".entity-toggle").forEach(cb => {
+          cb.checked = false;
+          const type = cb.getAttribute("data-type");
+          renderSettings.entity[type] = false;
+        });
+        viewer.draw();
+      });
+      
       // rendering option toggles
       document.getElementById("toggleLinetype").addEventListener("change",function(e){
         renderSettings.renderLinetype=!e.target.checked;
-        viewer.draw();
-      });
-      document.getElementById("toggleHatch").addEventListener("change",function(e){
-        renderSettings.renderHatch=!e.target.checked;
         viewer.draw();
       });
       document.getElementById("toggleColor").addEventListener("change",function(e){
