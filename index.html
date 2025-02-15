@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Improved Web DXF Viewer – with Split Options Popup</title>
+    <title>Improved Web DXF Viewer – Enhanced MTEXT & HATCH Rendering</title>
     <style>
       /* Fullscreen canvas and toolbar styling */
       body {
@@ -15,7 +15,7 @@
         position: absolute;
         top: 10px;
         left: 10px;
-        z-index: 110; /* above canvas but below overlays */
+        z-index: 110;
         background: rgba(255, 255, 255, 0.95);
         padding: 10px;
         border-radius: 4px;
@@ -25,7 +25,6 @@
       #toolbar input {
         margin: 4px 0;
       }
-      /* Common overlay styling for modal popups */
       .optionsOverlay {
         display: none;
         position: fixed;
@@ -36,7 +35,6 @@
         background: rgba(0, 0, 0, 0.3);
         z-index: 200;
       }
-      /* Common styling for popup content */
       .popupContent {
         position: absolute;
         top: 50px;
@@ -64,7 +62,6 @@
         <button id="toggleGrid">Toggle Grid</button>
       </div>
       <div style="margin-top:8px;">
-        <!-- New separate buttons for each popup -->
         <button id="toggleEntityOptions">Entity Options</button>
         <button id="toggleOtherOptions">Other Options</button>
       </div>
@@ -73,7 +70,7 @@
       </div>
     </div>
 
-    <!-- Overlay for Entity Options Popup -->
+    <!-- Overlays for popups -->
     <div id="entityOptionsOverlay" class="optionsOverlay">
       <div id="entityOptionsPopup" class="popupContent">
         <div><strong>Entity Types</strong></div>
@@ -129,14 +126,12 @@
       </div>
     </div>
 
-    <!-- Overlay for Other Rendering Options Popup -->
     <div id="otherOptionsOverlay" class="optionsOverlay">
       <div id="otherOptionsPopup" class="popupContent">
         <div><strong>Rendering Options</strong></div>
         <label>
           <input type="checkbox" id="toggleLinetype" /> Disable Linetype Rendering
         </label><br />
-        <!-- Hatch option removed since it is redundant with HATCH entity -->
         <label>
           <input type="checkbox" id="toggleColor" /> Disable Color Rendering
         </label><br />
@@ -209,8 +204,6 @@
       function computeBBox(pointsOrLoops) {
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         if (!pointsOrLoops || pointsOrLoops.length === 0) return { minX, minY, maxX, maxY };
-
-        // If it is an array of arrays (loops)
         if (Array.isArray(pointsOrLoops[0])) {
           pointsOrLoops.forEach(loop => {
             loop.forEach(pt => {
@@ -230,9 +223,8 @@
         }
         return { minX, minY, maxX, maxY };
       }
-
       function getNiceGridSpacing(viewport) {
-        const desiredSpacingScreen = 50; // pixels
+        const desiredSpacingScreen = 50;
         let spacingWorld = desiredSpacingScreen / viewport.viewScale;
         let exponent = Math.floor(Math.log10(spacingWorld));
         let fraction = spacingWorld / Math.pow(10, exponent);
@@ -245,17 +237,16 @@
       }
 
       // ─────────────────────────────────────────────────────────────
-      // MTEXT parsing helpers
+      // MTEXT Parsing Helpers
       // ─────────────────────────────────────────────────────────────
 
       function parseMTEXTContent(rawText, defaultSize, defaultFont, defaultColor) {
-        // Replace some AutoCAD control codes:
         rawText = rawText.replace(/%%d/g, "°").replace(/%%c/g, "Ø");
-
         let defaultStyle = {
           scale: 1,
           font: defaultFont,
           underline: false,
+          overline: false,
           bold: false,
           italic: false,
           color: defaultColor
@@ -269,7 +260,6 @@
         while (pos < text.length) {
           let ch = text[pos];
           if (ch === '{') {
-            // Save current text, parse group
             if (currentSegment.text) {
               segments.push(currentSegment);
               currentSegment = { text: "", style: Object.assign({}, currentStyle) };
@@ -282,7 +272,6 @@
             return { segments: segments, pos: pos + 1 };
           } else if (ch === '\\') {
             if (text.substr(pos, 2) === '\\P') {
-              // Paragraph break
               if (currentSegment.text) segments.push(currentSegment);
               segments.push({ paragraphBreak: true });
               pos += 2;
@@ -296,8 +285,73 @@
               currentStyle.underline = false;
               pos += 2;
               continue;
+            } else if (text.substr(pos, 2) === '\\O') {
+              currentStyle.overline = true;
+              pos += 2;
+              continue;
+            } else if (text.substr(pos, 2) === '\\o') {
+              currentStyle.overline = false;
+              pos += 2;
+              continue;
+            } else if (text.substr(pos, 2) === '\\B') {
+              currentStyle.bold = true;
+              pos += 2;
+              continue;
+            } else if (text.substr(pos, 2) === '\\b') {
+              currentStyle.bold = false;
+              pos += 2;
+              continue;
+            } else if (text.substr(pos, 2) === '\\I') {
+              currentStyle.italic = true;
+              pos += 2;
+              continue;
+            } else if (text.substr(pos, 2) === '\\i') {
+              currentStyle.italic = false;
+              pos += 2;
+              continue;
+            } else if (text.substr(pos, 2) === '\\C') {
+              pos += 2;
+              let colorCode = "";
+              while (pos < text.length && text[pos] !== ';') {
+                colorCode += text[pos];
+                pos++;
+              }
+              if (text[pos] === ';') pos++;
+              currentStyle.color = DXFStyle.getACIColor(parseInt(colorCode, 10));
+              continue;
+            } else if (text.substr(pos, 2) === '\\S') {
+              pos += 2;
+              let stackedStr = "";
+              while (pos < text.length && text[pos] !== ';') {
+                stackedStr += text[pos];
+                pos++;
+              }
+              if (text[pos] === ';') pos++;
+              let parts = stackedStr.split('^');
+              let topText = parts[0] || "";
+              let bottomText = parts[1] || "";
+              if (currentSegment.text) {
+                segments.push(currentSegment);
+                currentSegment = { text: "", style: Object.assign({}, currentStyle) };
+              }
+              segments.push({
+                stacked: { top: topText, bottom: bottomText },
+                style: Object.assign({}, currentStyle)
+              });
+              continue;
+            } else if (text.substr(pos, 2) === '\\{') {
+              currentSegment.text += '{';
+              pos += 2;
+              continue;
+            } else if (text.substr(pos, 2) === '\\}') {
+              currentSegment.text += '}';
+              pos += 2;
+              continue;
+            } else if (text.substr(pos, 2) === '\\~') {
+              currentSegment.text += "\u00A0";
+              pos += 2;
+              continue;
             } else {
-              // Some other escape
               currentSegment.text += ch;
               pos++;
             }
@@ -311,7 +365,6 @@
       }
       function parseGroup(text, pos, currentStyle) {
         if (text.substr(pos, 2) === '\\H') {
-          // height group
           pos += 2;
           let multiplierStr = "";
           while (pos < text.length && text[pos] !== 'x') {
@@ -326,7 +379,6 @@
           let result = parseFormattedText(text, pos, newStyle);
           return { segments: result.segments, pos: result.pos };
         } else if (text.substr(pos, 2) === '\\F') {
-          // font group
           pos += 2;
           let fontName = "";
           while (pos < text.length && text[pos] !== ';') {
@@ -339,7 +391,6 @@
           let result = parseFormattedText(text, pos, newStyle);
           return { segments: result.segments, pos: result.pos };
         } else {
-          // fallback
           return parseFormattedText(text, pos, currentStyle);
         }
       }
@@ -349,6 +400,13 @@
         let weight = segment.style.bold ? "bold " : "";
         let italic = segment.style.italic ? "italic " : "";
         let ctx = measureSegment.ctx || (measureSegment.ctx = document.createElement("canvas").getContext("2d"));
+        if (segment.stacked) {
+          let stackedSize = size * 0.7;
+          ctx.font = italic + weight + stackedSize + "px " + font;
+          let topWidth = ctx.measureText(segment.stacked.top).width;
+          let bottomWidth = ctx.measureText(segment.stacked.bottom).width;
+          return Math.max(topWidth, bottomWidth);
+        }
         ctx.font = italic + weight + size + "px " + font;
         return ctx.measureText(segment.text).width;
       }
@@ -382,63 +440,45 @@
       }
 
       // ─────────────────────────────────────────────────────────────
-      // DXF Style (color, line width, dash, transparency)
+      // DXF Style Helpers
       // ─────────────────────────────────────────────────────────────
 
       class DXFStyle {
-        // Simplified ACI table
         static ACI_COLORS = {
           0: "#000000", 1: "#FF0000", 2: "#FFFF00", 3: "#00FF00", 4: "#00FFFF",
           5: "#0000FF", 6: "#FF00FF", 7: "#FFFFFF", 8: "#808080", 9: "#C0C0C0",
           10: "#FF6600", 11: "#FF9900", 12: "#FFCC00", 13: "#CCFF00", 14: "#99FF00",
-          15: "#66FF00", 16: "#33FF00", 17: "#00FF33", 18: "#00FF66", 19: "#00FF99",
-          // etc. – truncated for brevity
+          15: "#66FF00", 16: "#33FF00", 17: "#00FF33", 18: "#00FF66", 19: "#00FF99"
         };
         static getACIColor(aci) {
           if (DXFStyle.ACI_COLORS.hasOwnProperty(aci)) {
             return DXFStyle.ACI_COLORS[aci];
           }
-          return DXFStyle.ACI_COLORS[7] || "#FFFFFF"; // default to white
+          return DXFStyle.ACI_COLORS[7] || "#FFFFFF";
         }
         static getEntityColor(entity, dxfDoc) {
-          // color rendering disabled => default to white/ACI7
           if (!renderSettings.renderColor) return DXFStyle.ACI_COLORS[7];
-
-          // True color (group 420)
           if (entity.raw["420"]) {
             let tc = parseInt(entity.raw["420"]);
             let hex = tc.toString(16).padStart(6, "0");
             return "#" + hex;
           }
-          // ACI color
           let colorIndex = parseInt(entity.raw["62"]);
           if (isNaN(colorIndex)) colorIndex = 256;
-
-          // BYBLOCK = 257 => fallback to 7 or handle actual block color logic
-          if (colorIndex === 257) {
-            colorIndex = 7; 
-          }
-
+          if (colorIndex === 257) colorIndex = 7;
           if (colorIndex === 0 || colorIndex === 256) {
-            // ByLayer
             let layerName = entity.raw["8"];
             if (layerName && dxfDoc.layers && dxfDoc.layers[layerName] && dxfDoc.layers[layerName]["62"]) {
               colorIndex = parseInt(dxfDoc.layers[layerName]["62"]);
-              if (colorIndex === 257) {
-                // ByBlock at layer level – fallback
-                colorIndex = 7;
-              }
+              if (colorIndex === 257) colorIndex = 7;
             } else {
-              // fallback
               colorIndex = 7;
             }
           }
           return DXFStyle.getACIColor(colorIndex);
         }
         static getLineWidth(entity, viewport) {
-          if (!renderSettings.renderThickness) {
-            return 1 / viewport.viewScale;
-          }
+          if (!renderSettings.renderThickness) return 1 / viewport.viewScale;
           let width;
           if (entity.raw["39"] && parseFloat(entity.raw["39"]) !== 0) {
             let thickness = parseFloat(entity.raw["39"]);
@@ -449,42 +489,24 @@
           } else {
             width = 1;
           }
-          // Only scale by 1/viewScale if we want thickness to remain constant in world
-          if (renderSettings.renderWidth) {
-            return width / viewport.viewScale;
-          } else {
-            return width; 
-          }
+          return renderSettings.renderWidth ? width / viewport.viewScale : width;
         }
         static getEntityLineDash(entity, viewport, dxfDoc) {
           if (!renderSettings.renderLinetype) return [];
           let linetypeName = entity.raw["6"];
           if (!linetypeName || linetypeName.toUpperCase() === "BYLAYER") {
             let layerName = entity.raw["8"];
-            if (
-              layerName &&
-              dxfDoc.layers &&
-              dxfDoc.layers[layerName] &&
-              dxfDoc.layers[layerName]["6"]
-            ) {
+            if (layerName && dxfDoc.layers && dxfDoc.layers[layerName] && dxfDoc.layers[layerName]["6"]) {
               linetypeName = dxfDoc.layers[layerName]["6"];
             }
           }
           if (!linetypeName) return [];
-          // Normalize linetype name for lookup
           linetypeName = linetypeName.toUpperCase();
-
           let patternScale = 1.0;
-          if (entity.raw["48"]) {
-            patternScale = parseFloat(entity.raw["48"]) || 1.0;
-          }
+          if (entity.raw["48"]) patternScale = parseFloat(entity.raw["48"]) || 1.0;
           if (dxfDoc.linetypes && dxfDoc.linetypes[linetypeName]) {
             let ltype = dxfDoc.linetypes[linetypeName];
             if (ltype.pattern && ltype.pattern.length > 0) {
-              // For each element in the pattern:
-              // • use the absolute value (so negatives become positive gaps)
-              // • if the value is 0 (a DXF “dot”), substitute a small positive length
-              // • convert from world units to screen units by multiplying by viewport.viewScale
               const dashArray = ltype.pattern.map(d => {
                 const absValue = Math.abs(d);
                 const dashLength = (absValue === 0 ? 0.5 : absValue);
@@ -498,9 +520,8 @@
       }
 
       // ─────────────────────────────────────────────────────────────
-      // Base Entity
+      // Base DXF Entity Class
       // ─────────────────────────────────────────────────────────────
-
       class DXFEntity {
         constructor(type) {
           this.type = type;
@@ -516,19 +537,16 @@
           return DXFStyle.getEntityLineDash(this, viewport, dxfDoc);
         }
         applyStyle(ctx, viewport, dxfDoc) {
-          ctx.setLineDash([]); // reset
+          ctx.setLineDash([]);
           ctx.lineWidth = this.getLineWidth(viewport);
           let color = this.getColor(dxfDoc);
           ctx.strokeStyle = color;
           ctx.fillStyle = color;
           let dash = this.getLineDash(viewport, dxfDoc);
           if (dash && dash.length > 0) ctx.setLineDash(dash);
-
-          // Transparency (group 440)
           if (renderSettings.renderTransparency && this.raw["440"] !== undefined) {
             let transpValue = parseInt(this.raw["440"], 10);
-            let alpha = 1 - (transpValue / 255);
-            ctx.globalAlpha = alpha;
+            ctx.globalAlpha = 1 - (transpValue / 255);
           } else {
             ctx.globalAlpha = 1;
           }
@@ -536,10 +554,9 @@
       }
 
       // ─────────────────────────────────────────────────────────────
-      // Entity Classes
+      // DXF Entity Classes (Most remain unchanged)
       // ─────────────────────────────────────────────────────────────
 
-      // LINE
       class DXFLine extends DXFEntity {
         constructor() {
           super("LINE");
@@ -548,7 +565,7 @@
         }
         static parse(lines, i) {
           let line = new DXFLine();
-          i += 2; 
+          i += 2;
           while (i < lines.length) {
             let code = lines[i].trim();
             if (code === "0") break;
@@ -558,9 +575,7 @@
               case "20": line.y1 = parseFloat(value); break;
               case "11": line.x2 = parseFloat(value); break;
               case "21": line.y2 = parseFloat(value); break;
-              default:
-                line.raw[code] = value;
-                break;
+              default: line.raw[code] = value; break;
             }
             i += 2;
           }
@@ -573,12 +588,10 @@
           ctx.moveTo(this.x1, this.y1);
           ctx.lineTo(this.x2, this.y2);
           ctx.stroke();
-          // restore alpha (to avoid leaking)
           ctx.globalAlpha = 1;
         }
       }
 
-      // CIRCLE
       class DXFCircle extends DXFEntity {
         constructor() {
           super("CIRCLE");
@@ -590,11 +603,11 @@
           while (i < lines.length) {
             let code = lines[i].trim();
             if (code === "0") break;
-            let value = (lines[i+1]||"").trim();
-            switch(code) {
+            let value = (lines[i + 1] || "").trim();
+            switch (code) {
               case "10": circle.cx = parseFloat(value); break;
               case "20": circle.cy = parseFloat(value); break;
-              case "40": circle.r  = parseFloat(value); break;
+              case "40": circle.r = parseFloat(value); break;
               default: circle.raw[code] = value; break;
             }
             i += 2;
@@ -605,13 +618,12 @@
           if (!renderSettings.entity["CIRCLE"]) return;
           this.applyStyle(ctx, viewport, dxfDoc);
           ctx.beginPath();
-          ctx.arc(this.cx, this.cy, this.r, 0, 2*Math.PI);
+          ctx.arc(this.cx, this.cy, this.r, 0, 2 * Math.PI);
           ctx.stroke();
           ctx.globalAlpha = 1;
         }
       }
 
-      // ARC
       class DXFArc extends DXFEntity {
         constructor() {
           super("ARC");
@@ -624,13 +636,13 @@
           while (i < lines.length) {
             let code = lines[i].trim();
             if (code === "0") break;
-            let value = (lines[i+1]||"").trim();
-            switch(code) {
+            let value = (lines[i + 1] || "").trim();
+            switch (code) {
               case "10": arc.cx = parseFloat(value); break;
               case "20": arc.cy = parseFloat(value); break;
               case "40": arc.r = parseFloat(value); break;
               case "50": arc.startAngle = parseFloat(value); break;
-              case "51": arc.endAngle   = parseFloat(value); break;
+              case "51": arc.endAngle = parseFloat(value); break;
               default: arc.raw[code] = value; break;
             }
             i += 2;
@@ -641,10 +653,8 @@
           if (!renderSettings.entity["ARC"]) return;
           this.applyStyle(ctx, viewport, dxfDoc);
           let startRad = DXFUtils.degToRad(this.startAngle);
-          let endRad   = DXFUtils.degToRad(this.endAngle);
-          if (endRad < startRad) {
-            endRad += 2 * Math.PI;
-          }
+          let endRad = DXFUtils.degToRad(this.endAngle);
+          if (endRad < startRad) endRad += 2 * Math.PI;
           ctx.beginPath();
           ctx.arc(this.cx, this.cy, this.r, startRad, endRad);
           ctx.stroke();
@@ -652,7 +662,6 @@
         }
       }
 
-      // POLYLINE
       class DXFPolyline extends DXFEntity {
         constructor() {
           super("POLYLINE");
@@ -664,9 +673,9 @@
           i += 2;
           while (i < lines.length) {
             let code = lines[i].trim();
-            if (code === "0" && (lines[i+1]||"").trim() === "VERTEX") break;
-            if (code === "0" && (lines[i+1]||"").trim() === "SEQEND") break;
-            let value = (lines[i+1]||"").trim();
+            if (code === "0" && (lines[i + 1] || "").trim() === "VERTEX") break;
+            if (code === "0" && (lines[i + 1] || "").trim() === "SEQEND") break;
+            let value = (lines[i + 1] || "").trim();
             if (code === "70") {
               let flag = parseInt(value);
               polyline.closed = (flag & 1) !== 0;
@@ -675,10 +684,9 @@
             }
             i += 2;
           }
-          // parse vertices
           while (i < lines.length) {
             let code = lines[i].trim();
-            let value = (lines[i+1]||"").trim();
+            let value = (lines[i + 1] || "").trim();
             if (code === "0" && value === "SEQEND") {
               i += 2;
               break;
@@ -689,12 +697,12 @@
               while (i < lines.length) {
                 let vCode = lines[i].trim();
                 if (vCode === "0") break;
-                let vValue = (lines[i+1]||"").trim();
+                let vValue = (lines[i + 1] || "").trim();
                 if (vCode === "10") vx = parseFloat(vValue);
                 else if (vCode === "20") vy = parseFloat(vValue);
                 i += 2;
               }
-              polyline.vertices.push({x: vx, y: vy});
+              polyline.vertices.push({ x: vx, y: vy });
             } else {
               i += 2;
             }
@@ -707,7 +715,7 @@
           this.applyStyle(ctx, viewport, dxfDoc);
           ctx.beginPath();
           ctx.moveTo(this.vertices[0].x, this.vertices[0].y);
-          for (let j=1; j < this.vertices.length; j++){
+          for (let j = 1; j < this.vertices.length; j++) {
             ctx.lineTo(this.vertices[j].x, this.vertices[j].y);
           }
           if (this.closed) ctx.closePath();
@@ -716,11 +724,10 @@
         }
       }
 
-      // LWPOLYLINE
       class DXFLwPolyline extends DXFEntity {
         constructor() {
           super("LWPOLYLINE");
-          this.vertices = [];  // {x, y, bulge}
+          this.vertices = [];
           this.closed = false;
         }
         static parse(lines, i) {
@@ -729,35 +736,29 @@
           while (i < lines.length) {
             let code = lines[i].trim();
             if (code === "0") break;
-            let value = (lines[i+1]||"").trim();
-            switch(code) {
+            let value = (lines[i + 1] || "").trim();
+            switch (code) {
               case "70":
-                lwpoly.closed = (parseInt(value,10) & 1) !== 0;
+                lwpoly.closed = (parseInt(value, 10) & 1) !== 0;
                 break;
               case "10": {
-                // x
                 let x = parseFloat(value);
                 let y = 0;
-                // see if next code is 20 => y
-                // we won't skip i+2 in a big while loop automatically, so we handle carefully
                 let oldI = i;
                 i += 2;
                 if (i < lines.length && lines[i].trim() === "20") {
-                  let yVal = (lines[i+1]||"").trim();
-                  y = parseFloat(yVal);
+                  y = parseFloat((lines[i + 1] || "").trim());
                   i += 2;
                 } else {
-                  // revert
                   i = oldI + 2;
                 }
-                // check if next code is 42 => bulge
                 let bulge = 0;
                 if (i < lines.length && lines[i].trim() === "42") {
-                  bulge = parseFloat((lines[i+1]||"").trim());
+                  bulge = parseFloat((lines[i + 1] || "").trim());
                   i += 2;
                 }
                 lwpoly.vertices.push({ x, y, bulge });
-                continue; // skip the final i += 2 below
+                continue;
               }
               default:
                 lwpoly.raw[code] = value;
@@ -771,52 +772,25 @@
           if (!renderSettings.entity["LWPOLYLINE"]) return;
           if (this.vertices.length === 0) return;
           this.applyStyle(ctx, viewport, dxfDoc);
-
           ctx.beginPath();
-          for (let j=0; j < this.vertices.length; j++){
+          for (let j = 0; j < this.vertices.length; j++) {
             let curr = this.vertices[j];
-            let next = this.vertices[(j+1) % this.vertices.length];
-            if (j===0) ctx.moveTo(curr.x, curr.y);
-
-            // If it's the last segment and not closed, stop
-            if (!this.closed && j === this.vertices.length - 1) {
-              break;
-            }
-
+            let next = this.vertices[(j + 1) % this.vertices.length];
+            if (j === 0) ctx.moveTo(curr.x, curr.y);
+            if (!this.closed && j === this.vertices.length - 1) break;
             let bulge = curr.bulge || 0;
             if (Math.abs(bulge) > 1e-9) {
-              // Arc segment
-              // bulge = tan(arcAngle/4)
-              // see: https://www.autodesk.com/techpubs/autocad/acadr14/dxf/bulge_angle_1.htm
               let chord = getDistance(curr, next);
-              let sagitta = Math.abs(bulge * chord / 2.0);
-              // angle:
               let theta = 4 * Math.atan(Math.abs(bulge));
-              // find center and draw arc
               let midpoint = getCenter(curr, next);
-              // direction from curr to next
               let dx = (next.x - curr.x), dy = (next.y - curr.y);
               let chordAngle = Math.atan2(dy, dx);
-              // radius
-              let radius = chord / (2 * Math.sin(theta/2));
-              // sign of bulge indicates direction
+              let radius = chord / (2 * Math.sin(theta / 2));
               let ccw = bulge > 0;
-
-              // compute center
-              // from midpoint, move perpendicular by some distance
-              let alpha = Math.PI/2 - (theta/2);
-              let d = radius * Math.cos(theta/2);
-              // sign depends on bulge sign
-              let perpAngle = chordAngle + (ccw ? +1 : -1)*(Math.PI/2);
-              let cx = midpoint.x + d * Math.cos(perpAngle);
-              let cy = midpoint.y + d * Math.sin(perpAngle);
-
-              // start angle / end angle
-              let startAngle = Math.atan2(curr.y - cy, curr.x - cx);
-              let endAngle   = Math.atan2(next.y - cy, next.x - cx);
-              ctx.arc(cx, cy, radius, startAngle, endAngle, !ccw);
+              let startAngle = Math.atan2(curr.y - midpoint.y, curr.x - midpoint.x);
+              let endAngle = Math.atan2(next.y - midpoint.y, next.x - midpoint.x);
+              ctx.arc(midpoint.x, midpoint.y, radius, startAngle, endAngle, !ccw);
             } else {
-              // straight line
               ctx.lineTo(next.x, next.y);
             }
           }
@@ -826,113 +800,155 @@
         }
       }
 
-      // HATCH (partial multi-loop approach)
+      // ─────────────────────────────────────────────────────────────
+      // Updated HATCH with Improved DXF/AutoCAD Compliance
+      // ─────────────────────────────────────────────────────────────
+
+      // Helper functions for sampling arcs and ellipses
+      function sampleArc(center, radius, startAngle, endAngle, numSegments = 20) {
+        let points = [];
+        for (let i = 0; i <= numSegments; i++) {
+          let t = startAngle + (endAngle - startAngle) * (i / numSegments);
+          points.push({ x: center.x + radius * Math.cos(t), y: center.y + radius * Math.sin(t) });
+        }
+        return points;
+      }
+      function sampleEllipse(center, major, minor, rotation, startParam, endParam, numSegments = 20) {
+        let points = [];
+        if (endParam < startParam) endParam += 2 * Math.PI;
+        for (let i = 0; i <= numSegments; i++) {
+          let t = startParam + (endParam - startParam) * (i / numSegments);
+          let x = center.x + major * Math.cos(t) * Math.cos(rotation) - minor * Math.sin(t) * Math.sin(rotation);
+          let y = center.y + major * Math.cos(t) * Math.sin(rotation) + minor * Math.sin(t) * Math.cos(rotation);
+          points.push({ x, y });
+        }
+        return points;
+      }
+
       class DXFHatch extends DXFEntity {
         constructor() {
           super("HATCH");
-          this.boundary = []; // array of loops, each loop is an array of {x,y}
+          this.boundaryLoops = []; // each loop is an array of {x,y}
           this.isSolid = false;
+          this.patternName = "";
         }
         static parse(lines, i) {
           let hatch = new DXFHatch();
           i += 2;
           let loopCount = 0;
-          let currentLoop = [];
-          let collectingEdges = false;
-          let edgesToRead = 0;
-
           while (i < lines.length) {
             let code = lines[i].trim();
+            let value = (lines[i + 1] || "").trim();
             if (code === "0") break;
-            let value = (lines[i+1]||"").trim();
-
-            switch(code) {
+            switch (code) {
               case "70":
-                // bits: if bit0 = 1 => solid
-                hatch.isSolid = (parseInt(value,10) & 1) !== 0;
-                break;
-              case "91":
-                // loopCount
-                loopCount = parseInt(value,10);
-                break;
-              case "92":
-                // edges in this loop
-                edgesToRead = parseInt(value,10);
-                currentLoop = [];
-                collectingEdges = true;
-                break;
-              case "72":
-                // edge type: line=1, arc=2, ellipse=3, spline=4
-                if (parseInt(value,10) === 1) {
-                  // read line from next "10,20" to "11,21"
-                  // but dxf can have them in separate codes
-                }
-                break;
-              case "10":
-                // x start or center - but for line edge type, 72=1 => line from (10,20) to (11,21).
-                // This is all quite big to handle fully. We'll do a simplistic approach:
-                // We'll interpret "10,20" as a boundary vertex.
-                {
-                  let x = parseFloat(value);
-                  i += 2;
-                  let y=0;
-                  if (i < lines.length && lines[i].trim() === "20") {
-                    y = parseFloat((lines[i+1]||"").trim());
-                    i += 2;
-                  } else {
-                    // revert
-                    i -= 2;
-                  }
-                  currentLoop.push({x,y});
-                  continue;
-                }
-              case "11":
-                // end of line, might be next vertex
-                {
-                  let x = parseFloat(value);
-                  i += 2;
-                  let y=0;
-                  if (i < lines.length && lines[i].trim() === "21") {
-                    y = parseFloat((lines[i+1]||"").trim());
-                    i += 2;
-                  } else {
-                    i -= 2;
-                  }
-                  currentLoop.push({x,y});
-                  continue;
-                }
-              case "93":
-                // indicates we've finished reading edges for that loop, perhaps
-                collectingEdges = false;
-                hatch.boundary.push(currentLoop);
-                currentLoop = [];
+                hatch.isSolid = (parseInt(value, 10) & 1) !== 0;
                 break;
               case "2":
-                // pattern name
-                hatch.raw["2"] = value.toUpperCase();
+                hatch.patternName = value.toUpperCase();
                 break;
+              case "91":
+                loopCount = parseInt(value, 10);
+                break;
+              case "92": {
+                // Start of a boundary loop
+                let edgeCount = parseInt(value, 10);
+                let loopPoints = [];
+                for (let j = 0; j < edgeCount; j++) {
+                  // Expect a group code "72" indicating edge type
+                  i += 2;
+                  if (i >= lines.length) break;
+                  let edgeTypeCode = lines[i - 2].trim();
+                  let edgeTypeVal = lines[i - 1].trim();
+                  let edgeType = (edgeTypeCode === "72") ? parseInt(edgeTypeVal, 10) : 1;
+                  let edgePoints = [];
+                  if (edgeType === 1) {
+                    // Line edge: expect group codes 10,20 for start and 11,21 for end
+                    let start = { x: 0, y: 0 }, end = { x: 0, y: 0 };
+                    while (i < lines.length) {
+                      let c = lines[i].trim();
+                      let v = (lines[i + 1] || "").trim();
+                      if (c === "10") { start.x = parseFloat(v); }
+                      else if (c === "20") { start.y = parseFloat(v); }
+                      else if (c === "11") { end.x = parseFloat(v); }
+                      else if (c === "21") { end.y = parseFloat(v); }
+                      else break;
+                      i += 2;
+                    }
+                    edgePoints = [start, end];
+                  } else if (edgeType === 2) {
+                    // Circular arc edge: expect center (10,20), radius (40), start angle (50) and end angle (51)
+                    let center = { x: 0, y: 0 }, radius = 0, startAngle = 0, endAngle = 0;
+                    while (i < lines.length) {
+                      let c = lines[i].trim();
+                      let v = (lines[i + 1] || "").trim();
+                      if (c === "10") { center.x = parseFloat(v); }
+                      else if (c === "20") { center.y = parseFloat(v); }
+                      else if (c === "40") { radius = parseFloat(v); }
+                      else if (c === "50") { startAngle = DXFUtils.degToRad(parseFloat(v)); }
+                      else if (c === "51") { endAngle = DXFUtils.degToRad(parseFloat(v)); }
+                      else break;
+                      i += 2;
+                    }
+                    if (endAngle < startAngle) endAngle += 2 * Math.PI;
+                    edgePoints = sampleArc(center, radius, startAngle, endAngle);
+                  } else if (edgeType === 3) {
+                    // Elliptical arc edge: expect center (10,20), major axis endpoint (11,21), ratio (40), start param (50) and end param (51)
+                    let center = { x: 0, y: 0 }, majorVec = { x: 0, y: 0 }, ratio = 1, startParam = 0, endParam = 0;
+                    while (i < lines.length) {
+                      let c = lines[i].trim();
+                      let v = (lines[i + 1] || "").trim();
+                      if (c === "10") { center.x = parseFloat(v); }
+                      else if (c === "20") { center.y = parseFloat(v); }
+                      else if (c === "11") { majorVec.x = parseFloat(v); }
+                      else if (c === "21") { majorVec.y = parseFloat(v); }
+                      else if (c === "40") { ratio = parseFloat(v); }
+                      else if (c === "50") { startParam = parseFloat(v); }
+                      else if (c === "51") { endParam = parseFloat(v); }
+                      else break;
+                      i += 2;
+                    }
+                    let majorLength = Math.sqrt(majorVec.x * majorVec.x + majorVec.y * majorVec.y);
+                    let minorLength = majorLength * ratio;
+                    let rotation = Math.atan2(majorVec.y, majorVec.x);
+                    edgePoints = sampleEllipse(center, majorLength, minorLength, rotation, startParam, endParam);
+                  } else {
+                    // For unsupported edge types (e.g. spline), skip parameters.
+                    while (i < lines.length) {
+                      let c = lines[i].trim();
+                      if (c === "0" || c === "92" || c === "93") break;
+                      i += 2;
+                    }
+                    edgePoints = [];
+                  }
+                  // Append edgePoints to the current loop (avoid duplicate connecting points)
+                  if (loopPoints.length > 0 && edgePoints.length > 0) {
+                    let last = loopPoints[loopPoints.length - 1];
+                    let first = edgePoints[0];
+                    if (Math.abs(last.x - first.x) < 1e-6 && Math.abs(last.y - first.y) < 1e-6) {
+                      edgePoints.shift();
+                    }
+                  }
+                  loopPoints.push(...edgePoints);
+                }
+                hatch.boundaryLoops.push(loopPoints);
+                break;
+              }
               default:
                 hatch.raw[code] = value;
                 break;
             }
             i += 2;
           }
-          // If we didn't parse loops but found some "10,20" lines, fallback approach
-          if (hatch.boundary.length === 0 && currentLoop.length > 0) {
-            hatch.boundary.push(currentLoop);
-          }
           return { entity: hatch, nextIndex: i };
         }
         draw(ctx, viewport, dxfDoc) {
           if (!renderSettings.entity["HATCH"]) return;
-          if (!renderSettings.renderHatch) return;
-          if (this.boundary.length === 0) return;
-
+          if (this.boundaryLoops.length === 0) return;
           this.applyStyle(ctx, viewport, dxfDoc);
           let fillColor = this.getColor(dxfDoc);
           ctx.save();
-
-          if (this.isSolid || (this.raw["2"]||"").includes("SOLID")) {
+          if (this.isSolid || (this.patternName && this.patternName.includes("SOLID"))) {
             ctx.fillStyle = fillColor;
             this.drawLoopsPath(ctx);
             ctx.fill();
@@ -940,16 +956,14 @@
             ctx.lineWidth = 1 / viewport.viewScale;
             ctx.stroke();
           } else {
-            // Simple pattern fill attempt – for demonstration
-            // We'll just do diagonal lines
             this.drawLoopsPath(ctx);
             ctx.clip();
-            let bbox = computeBBox(this.boundary);
-            let spacing = 10; // simplified
+            let bbox = computeBBox(this.boundaryLoops);
+            let spacing = 10;
             ctx.beginPath();
             let minX = bbox.minX - spacing, maxX = bbox.maxX + spacing;
             let minY = bbox.minY - spacing, maxY = bbox.maxY + spacing;
-            for (let y=minY; y<=maxY; y+=spacing) {
+            for (let y = minY; y <= maxY; y += spacing) {
               ctx.moveTo(minX, y);
               ctx.lineTo(maxX, y);
             }
@@ -962,10 +976,10 @@
         }
         drawLoopsPath(ctx) {
           ctx.beginPath();
-          this.boundary.forEach(loop => {
+          this.boundaryLoops.forEach(loop => {
             if (loop.length > 0) {
               ctx.moveTo(loop[0].x, loop[0].y);
-              for (let i=1; i<loop.length; i++){
+              for (let i = 1; i < loop.length; i++) {
                 ctx.lineTo(loop[i].x, loop[i].y);
               }
               ctx.closePath();
@@ -974,12 +988,11 @@
         }
       }
 
-      // DIMENSION (naive)
       class DXFDimension extends DXFEntity {
         constructor() {
           super("DIMENSION");
-          this.p1 = {x:0,y:0};
-          this.p2 = {x:0,y:0};
+          this.p1 = { x: 0, y: 0 };
+          this.p2 = { x: 0, y: 0 };
           this.defPt = null;
           this.text = "";
         }
@@ -989,16 +1002,16 @@
           while (i < lines.length) {
             let code = lines[i].trim();
             if (code === "0") break;
-            let value = (lines[i+1]||"").trim();
-            switch(code) {
+            let value = (lines[i + 1] || "").trim();
+            switch (code) {
               case "10": dim.p1.x = parseFloat(value); break;
               case "20": dim.p1.y = parseFloat(value); break;
               case "11": dim.p2.x = parseFloat(value); break;
               case "21": dim.p2.y = parseFloat(value); break;
               case "13":
               case "23":
-                if (!dim.defPt) dim.defPt = {x:0,y:0};
-                if (code==="13") dim.defPt.x = parseFloat(value);
+                if (!dim.defPt) dim.defPt = { x: 0, y: 0 };
+                if (code === "13") dim.defPt.x = parseFloat(value);
                 else dim.defPt.y = parseFloat(value);
                 break;
               case "1":
@@ -1015,27 +1028,23 @@
         draw(ctx, viewport, dxfDoc) {
           if (!renderSettings.entity["DIMENSION"]) return;
           this.applyStyle(ctx, viewport, dxfDoc);
-
           let p1 = this.p1, p2 = this.p2;
           let dx = p2.x - p1.x, dy = p2.y - p1.y;
-          let baselineLength = Math.sqrt(dx*dx + dy*dy);
+          let baselineLength = Math.sqrt(dx * dx + dy * dy);
           if (baselineLength < 1e-9) {
             ctx.globalAlpha = 1;
             return;
           }
-          let u = { x: dx/baselineLength, y: dy/baselineLength };
+          let u = { x: dx / baselineLength, y: dy / baselineLength };
           let v = { x: -u.y, y: u.x };
-          let mid = { x: (p1.x+p2.x)/2, y: (p1.y+p2.y)/2 };
-
+          let mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
           let offsetDistance = 5;
           if (this.defPt) {
             let mx = mid.x, my = mid.y;
-            offsetDistance = (this.defPt.x - mx)*v.x + (this.defPt.y - my)*v.y;
+            offsetDistance = (this.defPt.x - mx) * v.x + (this.defPt.y - my) * v.y;
           }
-          let p1_dim = { x: p1.x + v.x*offsetDistance, y: p1.y + v.y*offsetDistance };
-          let p2_dim = { x: p2.x + v.x*offsetDistance, y: p2.y + v.y*offsetDistance };
-
-          // lines
+          let p1_dim = { x: p1.x + v.x * offsetDistance, y: p1.y + v.y * offsetDistance };
+          let p2_dim = { x: p2.x + v.x * offsetDistance, y: p2.y + v.y * offsetDistance };
           ctx.beginPath();
           ctx.moveTo(p1.x, p1.y);
           ctx.lineTo(p1_dim.x, p1_dim.y);
@@ -1044,15 +1053,13 @@
           ctx.moveTo(p1_dim.x, p1_dim.y);
           ctx.lineTo(p2_dim.x, p2_dim.y);
           ctx.stroke();
-
-          // arrowheads
           function drawArrow(pt, direction) {
             const arrowSize = 3;
-            const arrowAngle = Math.PI/6;
+            const arrowAngle = Math.PI / 6;
             let leftAngle = Math.atan2(direction.y, direction.x) + arrowAngle;
-            let rightAngle= Math.atan2(direction.y, direction.x) - arrowAngle;
-            let left = { x: pt.x - arrowSize*Math.cos(leftAngle), y: pt.y - arrowSize*Math.sin(leftAngle) };
-            let right= { x: pt.x - arrowSize*Math.cos(rightAngle),y: pt.y - arrowSize*Math.sin(rightAngle) };
+            let rightAngle = Math.atan2(direction.y, direction.x) - arrowAngle;
+            let left = { x: pt.x - arrowSize * Math.cos(leftAngle), y: pt.y - arrowSize * Math.sin(leftAngle) };
+            let right = { x: pt.x - arrowSize * Math.cos(rightAngle), y: pt.y - arrowSize * Math.sin(rightAngle) };
             ctx.beginPath();
             ctx.moveTo(pt.x, pt.y);
             ctx.lineTo(left.x, left.y);
@@ -1061,22 +1068,19 @@
             ctx.fill();
           }
           let arrowDir = { x: p2_dim.x - p1_dim.x, y: p2_dim.y - p1_dim.y };
-          let arrowLen = Math.sqrt(arrowDir.x*arrowDir.x + arrowDir.y*arrowDir.y);
-          if (arrowLen>1e-9) {
+          let arrowLen = Math.sqrt(arrowDir.x * arrowDir.x + arrowDir.y * arrowDir.y);
+          if (arrowLen > 1e-9) {
             arrowDir.x /= arrowLen; arrowDir.y /= arrowLen;
             drawArrow(p1_dim, arrowDir);
-            drawArrow(p2_dim, {x:-arrowDir.x, y:-arrowDir.y});
+            drawArrow(p2_dim, { x: -arrowDir.x, y: -arrowDir.y });
           }
-
-          // text
           let dimText = this.text.trim();
           if (!dimText || dimText === "<>") {
             dimText = baselineLength.toFixed(2);
           }
-          let dimLineMid = { x: (p1_dim.x + p2_dim.x)/2, y: (p1_dim.y + p2_dim.y)/2};
+          let dimLineMid = { x: (p1_dim.x + p2_dim.x) / 2, y: (p1_dim.y + p2_dim.y) / 2 };
           let angle = Math.atan2(u.y, u.x);
-          if (angle > Math.PI/2 || angle < -Math.PI/2) angle += Math.PI;
-
+          if (angle > Math.PI / 2 || angle < -Math.PI / 2) angle += Math.PI;
           ctx.save();
           ctx.translate(dimLineMid.x, dimLineMid.y);
           ctx.rotate(angle);
@@ -1085,16 +1089,14 @@
           ctx.textBaseline = "middle";
           ctx.fillText(dimText, 0, 0);
           ctx.restore();
-
           ctx.globalAlpha = 1;
         }
       }
 
-      // MTEXT
       class DXFMTEXT extends DXFEntity {
         constructor() {
           super("MTEXT");
-          this.position = {x:0,y:0};
+          this.position = { x: 0, y: 0 };
           this.height = 12;
           this.rotation = 0;
           this.rawText = "";
@@ -1108,15 +1110,14 @@
           while (i < lines.length) {
             let code = lines[i].trim();
             if (code === "0") break;
-            let value = (lines[i+1]||"").trim();
-            switch(code) {
+            let value = (lines[i + 1] || "").trim();
+            switch (code) {
               case "10": mtext.position.x = parseFloat(value); break;
               case "20": mtext.position.y = parseFloat(value); break;
               case "40": mtext.height = parseFloat(value); break;
               case "50": mtext.rotation = parseFloat(value); break;
               case "1":
               case "3":
-                // code 3 is a continuation line
                 mtext.rawText += value;
                 break;
               case "7": mtext.font = value; break;
@@ -1132,17 +1133,14 @@
         }
         draw(ctx, viewport, dxfDoc) {
           if (!renderSettings.entity["MTEXT"]) return;
-          let {x,y} = this.position;
+          let { x, y } = this.position;
           let defaultSize = this.height;
           let rotation = this.rotation ? DXFUtils.degToRad(this.rotation) : 0;
           let rawText = this.rawText || "";
           let defaultFont = this.font || "sans-serif";
           let defaultColor = this.getColor(dxfDoc);
-
           this.applyStyle(ctx, viewport, dxfDoc);
-
           let parsedSegments = parseMTEXTContent(rawText, defaultSize, defaultFont, defaultColor);
-          // split into paragraphs
           let paragraphs = [], currentParagraph = [];
           parsedSegments.forEach(seg => {
             if (seg.paragraphBreak) {
@@ -1152,12 +1150,11 @@
               currentParagraph.push(seg);
             }
           });
-          if (currentParagraph.length>0) paragraphs.push(currentParagraph);
-
+          if (currentParagraph.length > 0) paragraphs.push(currentParagraph);
           let maxWidth = this.maxWidth || 0;
           let wrappedLines = [];
           let maxWidthScreen = maxWidth * viewport.viewScale;
-          if (maxWidth>0) {
+          if (maxWidth > 0) {
             paragraphs.forEach(para => {
               let lines = wrapMTEXTSegments(para, maxWidthScreen, defaultSize, viewport);
               wrappedLines.push(...lines);
@@ -1165,88 +1162,92 @@
           } else {
             wrappedLines = paragraphs;
           }
-
-          // alignment
-          let align = this.align || 1; // 1..9
-          // for simplicity, interpret align like a 3x3 grid
-          // 1=left/bottom,2= center/bottom,3=right/bottom ...
+          let align = this.align || 1;
           let hAlign = align % 3; 
           if (hAlign === 0) hAlign = 3; 
-          let vAlign = Math.floor((align-1)/3); // 0=bottom,1=middle,2=top
-          
-          let lineHeight = defaultSize*viewport.viewScale*1.2;
+          let vAlign = Math.floor((align - 1) / 3);
+          let lineHeight = defaultSize * viewport.viewScale * 1.2;
           let totalHeight = wrappedLines.length * lineHeight;
-
           let lineWidths = [];
           let maxLineWidth = 0;
           wrappedLines.forEach(line => {
-            let width = line.reduce((sum, seg) => sum+measureSegment(seg, defaultSize, viewport),0);
+            let width = line.reduce((sum, seg) => sum + measureSegment(seg, defaultSize, viewport), 0);
             lineWidths.push(width);
-            if (width>maxLineWidth) maxLineWidth = width;
+            if (width > maxLineWidth) maxLineWidth = width;
           });
-
-          // offset for vertical
           let offsetY = 0;
-          if (vAlign===1) {
-            offsetY = -totalHeight/2;
-          } else if (vAlign===2) {
-            offsetY = -totalHeight;
-          }
-
-          // transform
+          if (vAlign === 1) offsetY = -totalHeight / 2;
+          else if (vAlign === 2) offsetY = -totalHeight;
           ctx.save();
           let screenPos = viewport.worldToScreen(x, y);
-          ctx.setTransform(1,0,0,1,0,0);
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
           ctx.translate(screenPos.x, screenPos.y);
           ctx.rotate(-rotation);
           ctx.translate(0, offsetY);
-
-          // draw lines
-          for (let i=0; i<wrappedLines.length; i++){
+          for (let i = 0; i < wrappedLines.length; i++) {
             let line = wrappedLines[i];
             let lw = lineWidths[i];
             let offsetX = 0;
-            if (hAlign===2) {
-              // center
-              offsetX = (maxLineWidth-lw)/2;
-            } else if (hAlign===3) {
-              // right
-              offsetX = (maxLineWidth-lw);
-            }
+            if (hAlign === 2) offsetX = (maxLineWidth - lw) / 2;
+            else if (hAlign === 3) offsetX = (maxLineWidth - lw);
             ctx.save();
-            ctx.translate(offsetX, i*lineHeight);
+            ctx.translate(offsetX, i * lineHeight);
             let xPos = 0;
             line.forEach(seg => {
-              let segSize = defaultSize*(seg.style.scale||1)*viewport.viewScale;
+              let segSize = defaultSize * (seg.style.scale || 1) * viewport.viewScale;
               let segFont = seg.style.font || defaultFont;
               let segWeight = seg.style.bold ? "bold " : "";
               let segItalic = seg.style.italic ? "italic " : "";
-              ctx.font = segItalic + segWeight + segSize + "px " + segFont;
-              ctx.fillStyle = seg.style.color || defaultColor;
-              ctx.textBaseline = "alphabetic";
-              ctx.fillText(seg.text, xPos, 0);
-              if (seg.style.underline) {
-                let metrics = ctx.measureText(seg.text);
-                let underlineY = (metrics.actualBoundingBoxDescent!==undefined)
-                  ? metrics.actualBoundingBoxDescent+2 : segSize*0.3;
-                ctx.beginPath();
-                ctx.moveTo(xPos, underlineY);
-                ctx.lineTo(xPos+metrics.width, underlineY);
-                ctx.lineWidth = Math.max(1, segSize/15);
-                ctx.strokeStyle = ctx.fillStyle;
-                ctx.stroke();
+              if (seg.stacked) {
+                let stackedSize = segSize * 0.7;
+                ctx.font = segItalic + segWeight + stackedSize + "px " + segFont;
+                ctx.fillStyle = seg.style.color || defaultColor;
+                let topText = seg.stacked.top;
+                let bottomText = seg.stacked.bottom;
+                let topWidth = ctx.measureText(topText).width;
+                let bottomWidth = ctx.measureText(bottomText).width;
+                let width = Math.max(topWidth, bottomWidth);
+                ctx.textBaseline = "bottom";
+                ctx.fillText(topText, xPos + (width - topWidth) / 2, -stackedSize * 0.5);
+                ctx.textBaseline = "top";
+                ctx.fillText(bottomText, xPos + (width - bottomWidth) / 2, stackedSize * 0.5);
+                xPos += width;
+              } else {
+                ctx.font = segItalic + segWeight + segSize + "px " + segFont;
+                ctx.fillStyle = seg.style.color || defaultColor;
+                ctx.textBaseline = "alphabetic";
+                ctx.fillText(seg.text, xPos, 0);
+                if (seg.style.underline) {
+                  let metrics = ctx.measureText(seg.text);
+                  let underlineY = (metrics.actualBoundingBoxDescent !== undefined)
+                    ? metrics.actualBoundingBoxDescent + 2 : segSize * 0.3;
+                  ctx.beginPath();
+                  ctx.moveTo(xPos, underlineY);
+                  ctx.lineTo(xPos + metrics.width, underlineY);
+                  ctx.lineWidth = Math.max(1, segSize / 15);
+                  ctx.strokeStyle = ctx.fillStyle;
+                  ctx.stroke();
+                }
+                if (seg.style.overline) {
+                  let metrics = ctx.measureText(seg.text);
+                  let overlineY = -(metrics.actualBoundingBoxAscent !== undefined ? metrics.actualBoundingBoxAscent : segSize * 0.3);
+                  ctx.beginPath();
+                  ctx.moveTo(xPos, overlineY);
+                  ctx.lineTo(xPos + metrics.width, overlineY);
+                  ctx.lineWidth = Math.max(1, segSize / 15);
+                  ctx.strokeStyle = ctx.fillStyle;
+                  ctx.stroke();
+                }
+                xPos += ctx.measureText(seg.text).width;
               }
-              xPos += ctx.measureText(seg.text).width;
             });
             ctx.restore();
           }
-
           ctx.restore();
           ctx.globalAlpha = 1;
         }
       }
 
-      // SPLINE
       class DXFSpline extends DXFEntity {
         constructor() {
           super("SPLINE");
@@ -1258,13 +1259,13 @@
         static parse(lines, i) {
           let spline = new DXFSpline();
           i += 2;
-          while (i<lines.length) {
+          while (i < lines.length) {
             let code = lines[i].trim();
-            if (code==="0") break;
-            let value = (lines[i+1]||"").trim();
-            switch(code) {
+            if (code === "0") break;
+            let value = (lines[i + 1] || "").trim();
+            switch (code) {
               case "70": spline.raw["70"] = value; break;
-              case "71": spline.degree = parseInt(value,10); break;
+              case "71": spline.degree = parseInt(value, 10); break;
               case "72": spline.raw["72"] = value; break;
               case "73": spline.raw["73"] = value; break;
               case "74": spline.raw["74"] = value; break;
@@ -1272,25 +1273,27 @@
                 spline.knots.push(parseFloat(value));
                 break;
               case "10": {
-                let pt = {x: parseFloat(value)};
-                i+=2;
-                if (i<lines.length && lines[i].trim()==="20") {
-                  pt.y = parseFloat((lines[i+1]||"").trim());
-                  i+=2;
+                let pt = { x: parseFloat(value) };
+                i += 2;
+                if (i < lines.length && lines[i].trim() === "20") {
+                  pt.y = parseFloat((lines[i + 1] || "").trim());
+                  i += 2;
                 } else {
-                  pt.y=0; i-=2;
+                  pt.y = 0;
+                  i -= 2;
                 }
                 spline.controlPoints.push(pt);
                 continue;
               }
               case "11": {
-                let pt = {x: parseFloat(value)};
-                i+=2;
-                if (i<lines.length && lines[i].trim()==="21") {
-                  pt.y = parseFloat((lines[i+1]||"").trim());
-                  i+=2;
+                let pt = { x: parseFloat(value) };
+                i += 2;
+                if (i < lines.length && lines[i].trim() === "21") {
+                  pt.y = parseFloat((lines[i + 1] || "").trim());
+                  i += 2;
                 } else {
-                  pt.y=0; i-=2;
+                  pt.y = 0;
+                  i -= 2;
                 }
                 spline.fitPoints.push(pt);
                 continue;
@@ -1299,84 +1302,80 @@
                 spline.raw[code] = value;
                 break;
             }
-            i+=2;
+            i += 2;
           }
-          return {entity:spline, nextIndex:i};
+          return { entity: spline, nextIndex: i };
         }
         draw(ctx, viewport, dxfDoc) {
           if (!renderSettings.entity["SPLINE"]) return;
           this.applyStyle(ctx, viewport, dxfDoc);
-
           let samplePoints = [];
-          if (this.controlPoints.length>= (this.degree+1)
-              && this.knots.length>0 && this.degree!=null) {
+          if (this.controlPoints.length >= (this.degree + 1) && this.knots.length > 0 && this.degree != null) {
             let k = this.degree;
             let cp = this.controlPoints;
             let knots = this.knots;
             let t_min = knots[k];
-            let t_max = knots[knots.length - k -1];
-            let numSamples=50;
-            for (let i=0; i<=numSamples; i++){
-              let t = t_min + (t_max - t_min)*(i/numSamples);
+            let t_max = knots[knots.length - k - 1];
+            let numSamples = 50;
+            for (let i = 0; i <= numSamples; i++) {
+              let t = t_min + (t_max - t_min) * (i / numSamples);
               let pt = deBoor(k, cp, knots, t);
               samplePoints.push(pt);
             }
-          } else if (this.fitPoints && this.fitPoints.length>=2) {
+          } else if (this.fitPoints && this.fitPoints.length >= 2) {
             samplePoints = this.fitPoints;
           } else {
             return;
           }
           ctx.beginPath();
           ctx.moveTo(samplePoints[0].x, samplePoints[0].y);
-          for (let i=1; i<samplePoints.length; i++){
+          for (let i = 1; i < samplePoints.length; i++) {
             ctx.lineTo(samplePoints[i].x, samplePoints[i].y);
           }
           ctx.stroke();
           ctx.globalAlpha = 1;
         }
       }
-      // De Boor
       function deBoor(k, cp, knots, t) {
-        let n = cp.length -1;
-        let i=k;
-        for (; i<=n; i++){
-          if (t<knots[i+1]) break;
+        let n = cp.length - 1;
+        let i = k;
+        for (; i <= n; i++) {
+          if (t < knots[i + 1]) break;
         }
-        if (i>n) i=n;
-        let d=[];
-        for (let j=0; j<=k; j++){
-          d[j] = { x: cp[i-k+j].x, y: cp[i-k+j].y };
+        if (i > n) i = n;
+        let d = [];
+        for (let j = 0; j <= k; j++) {
+          d[j] = { x: cp[i - k + j].x, y: cp[i - k + j].y };
         }
-        for (let r=1; r<=k; r++){
-          for (let j=k; j>=r; j--){
-            let idx = i-k+j;
-            let denom = knots[idx + k-r+1] - knots[idx];
-            let alpha = (denom===0)? 0 : (t - knots[idx]) / denom;
-            d[j].x = (1-alpha)*d[j-1].x + alpha*d[j].x;
-            d[j].y = (1-alpha)*d[j-1].y + alpha*d[j].y;
+        for (let r = 1; r <= k; r++) {
+          for (let j = k; j >= r; j--) {
+            let idx = i - k + j;
+            let denom = knots[idx + k - r + 1] - knots[idx];
+            let alpha = (denom === 0) ? 0 : (t - knots[idx]) / denom;
+            d[j].x = (1 - alpha) * d[j - 1].x + alpha * d[j].x;
+            d[j].y = (1 - alpha) * d[j - 1].y + alpha * d[j].y;
           }
         }
         return d[k];
       }
 
-      // INSERT
       class DXFInsert extends DXFEntity {
         constructor() {
           super("INSERT");
           this.blockName = "";
-          this.insertionPoint = {x:0,y:0};
-          this.scale = {x:1, y:1};
+          this.insertionPoint = { x: 0, y: 0 };
+          this.scale = { x: 1, y: 1 };
           this.rotation = 0;
           this.attribs = [];
         }
         static parse(lines, i) {
           let insert = new DXFInsert();
-          i+=2;
-          while (i<lines.length) {
+          i += 2;
+          while (i < lines.length) {
             let code = lines[i].trim();
-            if (code==="0") break;
-            let value = (lines[i+1]||"").trim();
-            switch(code) {
+            if (code === "0") break;
+            let value = (lines[i + 1] || "").trim();
+            switch (code) {
               case "2": insert.blockName = value; break;
               case "10": insert.insertionPoint.x = parseFloat(value); break;
               case "20": insert.insertionPoint.y = parseFloat(value); break;
@@ -1384,71 +1383,65 @@
               case "42": insert.scale.y = parseFloat(value); break;
               case "50": insert.rotation = parseFloat(value); break;
               default:
-                insert.raw[code]=value;
+                insert.raw[code] = value;
                 break;
             }
-            i+=2;
+            i += 2;
           }
-          return {entity: insert, nextIndex: i};
+          return { entity: insert, nextIndex: i };
         }
         draw(ctx, viewport, dxfDoc) {
           if (!renderSettings.entity["INSERT"]) return;
           let block = dxfDoc.blocks[this.blockName];
           if (!block) return;
-          this.applyStyle(ctx, viewport, dxfDoc); // optional if you want the insert itself styled
-
+          this.applyStyle(ctx, viewport, dxfDoc);
           ctx.save();
-          let {x:insX, y:insY} = this.insertionPoint;
-          let {x:scaleX, y:scaleY} = this.scale;
+          let { x: insX, y: insY } = this.insertionPoint;
+          let { x: scaleX, y: scaleY } = this.scale;
           let angle = DXFUtils.degToRad(this.rotation);
-          let bp = block.basePoint || {x:0,y:0};
-
+          let bp = block.basePoint || { x: 0, y: 0 };
           ctx.translate(insX, insY);
           ctx.rotate(angle);
           ctx.scale(scaleX, scaleY);
           ctx.translate(-bp.x, -bp.y);
-
           block.entities.forEach(e => {
-            if (renderSettings.entity[e.type]!==false) {
+            if (renderSettings.entity[e.type] !== false) {
               e.draw(ctx, viewport, dxfDoc);
             }
           });
-          // render any attached ATTRIB
           this.attribs.forEach(attr => {
-            if (renderSettings.entity[attr.type]!==false) {
+            if (renderSettings.entity[attr.type] !== false) {
               attr.draw(ctx, viewport, dxfDoc);
             }
           });
-
           ctx.restore();
           ctx.globalAlpha = 1;
         }
       }
 
-      // TEXT / ATTRIB
       class DXFText extends DXFEntity {
         constructor(type) {
           super(type);
-          this.position = {x:0,y:0};
+          this.position = { x: 0, y: 0 };
           this.height = 12;
           this.rotation = 0;
           this.text = "";
           this.font = "sans-serif";
         }
         static parse(lines, i) {
-          let textEntity = new DXFText((lines[i+1]||"").trim());
-          i+=2;
-          while (i<lines.length) {
+          let textEntity = new DXFText((lines[i + 1] || "").trim());
+          i += 2;
+          while (i < lines.length) {
             let code = lines[i].trim();
-            if (code==="0") break;
-            let value = (lines[i+1]||"").trim();
-            switch(code) {
+            if (code === "0") break;
+            let value = (lines[i + 1] || "").trim();
+            switch (code) {
               case "10": textEntity.position.x = parseFloat(value); break;
               case "20": textEntity.position.y = parseFloat(value); break;
               case "40": textEntity.height = parseFloat(value); break;
               case "50": textEntity.rotation = parseFloat(value); break;
               case "1":
-              case "3": // possible continuation
+              case "3":
                 textEntity.text += value;
                 break;
               case "7": textEntity.font = value; break;
@@ -1456,23 +1449,21 @@
                 textEntity.raw[code] = value;
                 break;
             }
-            i+=2;
+            i += 2;
           }
           return { entity: textEntity, nextIndex: i };
         }
         draw(ctx, viewport, dxfDoc) {
           if (!renderSettings.entity[this.type]) return;
           this.applyStyle(ctx, viewport, dxfDoc);
-
           let x = this.position.x, y = this.position.y;
           let height = this.height;
           let rotation = this.rotation ? DXFUtils.degToRad(this.rotation) : 0;
           let text = this.text;
           let screen = viewport.worldToScreen(x, y);
           let screenFontSize = height * viewport.viewScale;
-
           ctx.save();
-          ctx.setTransform(1,0,0,1,0,0);
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
           ctx.translate(screen.x, screen.y);
           ctx.rotate(-rotation);
           ctx.fillStyle = this.getColor(dxfDoc);
@@ -1480,29 +1471,27 @@
           ctx.textBaseline = "alphabetic";
           ctx.fillText(text, 0, 0);
           ctx.restore();
-
           ctx.globalAlpha = 1;
         }
       }
 
-      // ELLIPSE (minimal)
       class DXFEllipse extends DXFEntity {
         constructor() {
           super("ELLIPSE");
           this.cx = 0; this.cy = 0;
-          this.mx = 0; this.my = 0; // major axis vector
-          this.ratio = 1; 
+          this.mx = 0; this.my = 0;
+          this.ratio = 1;
           this.startParam = 0;
-          this.endParam = 2*Math.PI;
+          this.endParam = 2 * Math.PI;
         }
         static parse(lines, i) {
           let ell = new DXFEllipse();
-          i+=2;
-          while (i<lines.length) {
+          i += 2;
+          while (i < lines.length) {
             let code = lines[i].trim();
-            if (code==="0") break;
-            let value = (lines[i+1]||"").trim();
-            switch(code) {
+            if (code === "0") break;
+            let value = (lines[i + 1] || "").trim();
+            switch (code) {
               case "10": ell.cx = parseFloat(value); break;
               case "20": ell.cy = parseFloat(value); break;
               case "11": ell.mx = parseFloat(value); break;
@@ -1510,37 +1499,29 @@
               case "40": ell.ratio = parseFloat(value); break;
               case "41": ell.startParam = parseFloat(value); break;
               case "42": ell.endParam = parseFloat(value); break;
-              default:
-                ell.raw[code]=value;
-                break;
+              default: ell.raw[code] = value; break;
             }
-            i+=2;
+            i += 2;
           }
-          return {entity:ell, nextIndex:i};
+          return { entity: ell, nextIndex: i };
         }
         draw(ctx, viewport, dxfDoc) {
           if (!renderSettings.entity["ELLIPSE"]) return;
           this.applyStyle(ctx, viewport, dxfDoc);
-          let rx = Math.sqrt(this.mx*this.mx + this.my*this.my);
+          let rx = Math.sqrt(this.mx * this.mx + this.my * this.my);
           let ry = rx * this.ratio;
-          // angle of major axis
           let angle = Math.atan2(this.my, this.mx);
           ctx.save();
           ctx.beginPath();
           ctx.translate(this.cx, this.cy);
           ctx.rotate(angle);
-          ctx.scale(1,1);
-          let start = this.startParam; // in radians
-          let end   = this.endParam;
-          if (end<start) end += 2*Math.PI;
-          ctx.ellipse(0, 0, rx, ry, 0, start, end);
+          ctx.ellipse(0, 0, rx, ry, 0, this.startParam, this.endParam);
           ctx.stroke();
           ctx.restore();
           ctx.globalAlpha = 1;
         }
       }
 
-      // 3DFACE (minimal)
       class DXF3DFace extends DXFEntity {
         constructor() {
           super("3DFACE");
@@ -1548,58 +1529,47 @@
         }
         static parse(lines, i) {
           let face = new DXF3DFace();
-          i+=2;
+          i += 2;
           let corners = [];
-          while (i<lines.length) {
+          while (i < lines.length) {
             let code = lines[i].trim();
-            if (code==="0") break;
-            let value = (lines[i+1]||"").trim();
-            // group codes for 3DFACE corners:
-            // 10,20,30 => first corner
-            // 11,21,31 => second corner
-            // ...
-            let idx = parseInt(code[0],10); // the first digit
-            if (code==="10" || code==="11" || code==="12" || code==="13") {
+            if (code === "0") break;
+            let value = (lines[i + 1] || "").trim();
+            if (code === "10" || code === "11" || code === "12" || code === "13") {
               let x = parseFloat(value);
-              i+=2;
-              let y=0;
-              if (i<lines.length && (lines[i].trim()===(parseInt(code)+10).toString())) {
-                y = parseFloat((lines[i+1]||"").trim());
-                i+=2;
+              i += 2;
+              let y = 0;
+              if (i < lines.length && lines[i].trim() === (parseInt(code) + 10).toString()) {
+                y = parseFloat((lines[i + 1] || "").trim());
+                i += 2;
               } else {
-                i-=2;
+                i -= 2;
               }
-              // ignore z for 2D viewer
-              corners.push({x,y});
+              corners.push({ x, y });
               continue;
             } else {
-              face.raw[code]=value;
+              face.raw[code] = value;
             }
-            i+=2;
+            i += 2;
           }
           face.points = corners;
-          return {entity:face, nextIndex:i};
+          return { entity: face, nextIndex: i };
         }
         draw(ctx, viewport, dxfDoc) {
           if (!renderSettings.entity["3DFACE"]) return;
           this.applyStyle(ctx, viewport, dxfDoc);
-          if (this.points.length<3) return;
-
+          if (this.points.length < 3) return;
           ctx.beginPath();
           ctx.moveTo(this.points[0].x, this.points[0].y);
-          for (let i=1; i<this.points.length; i++){
+          for (let i = 1; i < this.points.length; i++) {
             ctx.lineTo(this.points[i].x, this.points[i].y);
           }
-          // 3DFACE can be triangle or quad
-          if (this.points.length === 3 || this.points.length===4) {
-            ctx.closePath();
-          }
+          if (this.points.length === 3 || this.points.length === 4) ctx.closePath();
           ctx.stroke();
           ctx.globalAlpha = 1;
         }
       }
 
-      // SOLID (similar to 3DFACE but always 4 corners, filled)
       class DXFSolid extends DXFEntity {
         constructor() {
           super("SOLID");
@@ -1607,41 +1577,40 @@
         }
         static parse(lines, i) {
           let solid = new DXFSolid();
-          i+=2;
+          i += 2;
           let corners = [];
-          while (i<lines.length) {
+          while (i < lines.length) {
             let code = lines[i].trim();
-            if (code==="0") break;
-            let value = (lines[i+1]||"").trim();
-            if (code==="10"||code==="11"||code==="12"||code==="13") {
-              let x=parseFloat(value);
-              i+=2;
-              let y=0;
-              if (i<lines.length && lines[i].trim()===(parseInt(code)+10).toString()) {
-                y=parseFloat((lines[i+1]||"").trim());
-                i+=2;
+            if (code === "0") break;
+            let value = (lines[i + 1] || "").trim();
+            if (code === "10" || code === "11" || code === "12" || code === "13") {
+              let x = parseFloat(value);
+              i += 2;
+              let y = 0;
+              if (i < lines.length && lines[i].trim() === (parseInt(code) + 10).toString()) {
+                y = parseFloat((lines[i + 1] || "").trim());
+                i += 2;
               } else {
-                i-=2;
+                i -= 2;
               }
-              corners.push({x,y});
+              corners.push({ x, y });
               continue;
             }
-            solid.raw[code]=value;
-            i+=2;
+            solid.raw[code] = value;
+            i += 2;
           }
           solid.points = corners;
-          return {entity:solid, nextIndex:i};
+          return { entity: solid, nextIndex: i };
         }
         draw(ctx, viewport, dxfDoc) {
           if (!renderSettings.entity["SOLID"]) return;
           this.applyStyle(ctx, viewport, dxfDoc);
-          if (this.points.length<3) return;
+          if (this.points.length < 3) return;
           ctx.beginPath();
           ctx.moveTo(this.points[0].x, this.points[0].y);
-          for (let i=1; i<this.points.length; i++){
+          for (let i = 1; i < this.points.length; i++) {
             ctx.lineTo(this.points[i].x, this.points[i].y);
           }
-          // close
           ctx.closePath();
           ctx.fill();
           ctx.stroke();
@@ -1649,34 +1618,30 @@
         }
       }
 
-      // Generic fallback
       class GenericDXFEntity extends DXFEntity {
         static parse(lines, i) {
-          let type = (lines[i+1]||"").trim();
+          let type = (lines[i + 1] || "").trim();
           let gen = new GenericDXFEntity(type);
-          i+=2;
-          while (i<lines.length) {
+          i += 2;
+          while (i < lines.length) {
             let code = lines[i].trim();
-            if (code==="0") break;
-            let value = (lines[i+1]||"").trim();
-            gen.raw[code]=value;
-            i+=2;
+            if (code === "0") break;
+            let value = (lines[i + 1] || "").trim();
+            gen.raw[code] = value;
+            i += 2;
           }
-          return {entity:gen, nextIndex:i};
+          return { entity: gen, nextIndex: i };
         }
-        draw(ctx, viewport, dxfDoc) {
-          // do nothing
-        }
+        draw(ctx, viewport, dxfDoc) {}
       }
 
       // ─────────────────────────────────────────────────────────────
-      // BLOCK / DOCUMENT
+      // BLOCK / DOCUMENT CLASSES
       // ─────────────────────────────────────────────────────────────
-
       class DXFBlock {
         constructor(name) {
           this.name = name;
-          this.basePoint = {x:0,y:0};
+          this.basePoint = { x: 0, y: 0 };
           this.entities = [];
         }
       }
@@ -1690,23 +1655,22 @@
       }
 
       // ─────────────────────────────────────────────────────────────
-      // PARSER
+      // DXF PARSER CLASS
       // ─────────────────────────────────────────────────────────────
-
       class DXFParser {
         parse(text) {
           const lines = text.split(/\r\n|\n/);
           let dxf = new DXFDocument();
-          let i=0;
-          while(i<lines.length) {
+          let i = 0;
+          while (i < lines.length) {
             let code = lines[i].trim();
-            let value= (lines[i+1]||"").trim();
-            if (code==="0" && value==="SECTION") {
-              i+=2;
+            let value = (lines[i + 1] || "").trim();
+            if (code === "0" && value === "SECTION") {
+              i += 2;
               if (lines[i]?.trim() === "2") {
-                let sectionName = (lines[i+1]||"").trim();
-                i+=2;
-                switch(sectionName) {
+                let sectionName = (lines[i + 1] || "").trim();
+                i += 2;
+                switch (sectionName) {
                   case "TABLES":
                     let tablesResult = this.parseTables(lines, i);
                     dxf.layers = tablesResult.layers;
@@ -1720,131 +1684,130 @@
                     i = this.parseEntities(lines, i, dxf);
                     break;
                   default:
-                    // skip unknown sections
-                    while(i<lines.length) {
-                      if (lines[i].trim()==="0" && (lines[i+1]||"").trim()==="ENDSEC") {
-                        i+=2;
+                    while (i < lines.length) {
+                      if (lines[i].trim() === "0" && (lines[i + 1] || "").trim() === "ENDSEC") {
+                        i += 2;
                         break;
                       }
-                      i+=2;
+                      i += 2;
                     }
                     break;
                 }
               }
-            }
-            else {
-              i+=2;
+            } else {
+              i += 2;
             }
           }
           return dxf;
         }
-
         parseTables(lines, i) {
-          let layers={}, linetypes={};
-          while(i<lines.length) {
+          let layers = {}, linetypes = {};
+          while (i < lines.length) {
             let code = lines[i].trim();
-            let value = (lines[i+1]||"").trim();
-            if (code==="0" && value==="ENDSEC") {
-              i+=2; break;
+            let value = (lines[i + 1] || "").trim();
+            if (code === "0" && value === "ENDSEC") {
+              i += 2;
+              break;
             }
-            if (code==="0" && value==="TABLE") {
-              i+=2;
-              let tableName = (lines[i+1]||"").trim();
-              i+=2;
-              if (tableName==="LAYER") {
-                // parse layer table
-                while(i<lines.length) {
-                  let c=lines[i].trim();
-                  let v=(lines[i+1]||"").trim();
-                  if (c==="0" && (v==="ENDTAB"||v==="ENDTABLE")) {
-                    i+=2; break;
+            if (code === "0" && value === "TABLE") {
+              i += 2;
+              let tableName = (lines[i + 1] || "").trim();
+              i += 2;
+              if (tableName === "LAYER") {
+                while (i < lines.length) {
+                  let c = lines[i].trim();
+                  let v = (lines[i + 1] || "").trim();
+                  if (c === "0" && (v === "ENDTAB" || v === "ENDTABLE")) {
+                    i += 2;
+                    break;
                   }
-                  if (c==="0" && v==="LAYER") {
-                    let layer={};
-                    i+=2;
-                    while(i<lines.length) {
-                      let lc=lines[i].trim();
-                      if (lc==="0") break;
-                      let lv=(lines[i+1]||"").trim();
-                      if (lc==="2") layer.name = lv;
-                      else if (lc==="62") layer["62"]= lv;
-                      else if (lc==="6") layer["6"] = lv; 
-                      i+=2;
+                  if (c === "0" && v === "LAYER") {
+                    let layer = {};
+                    i += 2;
+                    while (i < lines.length) {
+                      let lc = lines[i].trim();
+                      if (lc === "0") break;
+                      let lv = (lines[i + 1] || "").trim();
+                      if (lc === "2") layer.name = lv;
+                      else if (lc === "62") layer["62"] = lv;
+                      else if (lc === "6") layer["6"] = lv;
+                      i += 2;
                     }
                     if (layer.name) layers[layer.name] = layer;
                   } else {
-                    i+=2;
+                    i += 2;
                   }
                 }
-              } else if (tableName==="LTYPE") {
-                while(i<lines.length) {
-                  let c=lines[i].trim();
-                  let v=(lines[i+1]||"").trim();
-                  if (c==="0" && (v==="ENDTAB"||v==="ENDTABLE")) {
-                    i+=2; break;
+              } else if (tableName === "LTYPE") {
+                while (i < lines.length) {
+                  let c = lines[i].trim();
+                  let v = (lines[i + 1] || "").trim();
+                  if (c === "0" && (v === "ENDTAB" || v === "ENDTABLE")) {
+                    i += 2;
+                    break;
                   }
-                  if (c==="0" && v==="LTYPE") {
-                    let lt={};
-                    i+=2;
-                    while(i<lines.length) {
-                      let lc=lines[i].trim();
-                      if (lc==="0") break;
-                      let lv=(lines[i+1]||"").trim();
-                      if (lc==="2") lt.name=lv;
-                      else if (lc==="3") lt.description=lv;
-                      else if (lc==="72") lt.flags=lv;
-                      else if (lc==="73") lt.elements=parseInt(lv,10);
-                      else if (lc==="40") lt.patternLength = parseFloat(lv);
-                      else if (lc==="49") {
-                        if(!lt.pattern) lt.pattern=[];
+                  if (c === "0" && v === "LTYPE") {
+                    let lt = {};
+                    i += 2;
+                    while (i < lines.length) {
+                      let lc = lines[i].trim();
+                      if (lc === "0") break;
+                      let lv = (lines[i + 1] || "").trim();
+                      if (lc === "2") lt.name = lv;
+                      else if (lc === "3") lt.description = lv;
+                      else if (lc === "72") lt.flags = lv;
+                      else if (lc === "73") lt.elements = parseInt(lv, 10);
+                      else if (lc === "40") lt.patternLength = parseFloat(lv);
+                      else if (lc === "49") {
+                        if (!lt.pattern) lt.pattern = [];
                         lt.pattern.push(parseFloat(lv));
                       }
-                      i+=2;
+                      i += 2;
                     }
                     if (lt.name) {
-                      linetypes[lt.name]=lt;
+                      linetypes[lt.name] = lt;
                     }
                   } else {
-                    i+=2;
+                    i += 2;
                   }
                 }
               } else {
-                // skip unknown table
-                while(i<lines.length) {
-                  let c=lines[i].trim();
-                  let v=(lines[i+1]||"").trim();
-                  if (c==="0" && (v==="ENDTAB"||v==="ENDTABLE")) {
-                    i+=2; break;
+                while (i < lines.length) {
+                  let c = lines[i].trim();
+                  let v = (lines[i + 1] || "").trim();
+                  if (c === "0" && (v === "ENDTAB" || v === "ENDTABLE")) {
+                    i += 2;
+                    break;
                   }
-                  i+=2;
+                  i += 2;
                 }
               }
             } else {
-              i+=2;
+              i += 2;
             }
           }
-          return {layers, linetypes, nextIndex:i};
+          return { layers, linetypes, nextIndex: i };
         }
-
         parseBlocks(lines, i, dxf) {
-          while(i<lines.length) {
-            let code=lines[i].trim();
-            let value=(lines[i+1]||"").trim();
-            if (code==="0" && value==="ENDSEC") {
-              i+=2; break;
+          while (i < lines.length) {
+            let code = lines[i].trim();
+            let value = (lines[i + 1] || "").trim();
+            if (code === "0" && value === "ENDSEC") {
+              i += 2;
+              break;
             }
-            if (code==="0" && value==="BLOCK") {
+            if (code === "0" && value === "BLOCK") {
               let block = new DXFBlock("");
-              i+=2;
-              while(i<lines.length) {
-                let c=lines[i].trim();
-                if (c==="0") {
-                  let v=(lines[i+1]||"").trim();
-                  if (v==="ENDBLK") {
-                    i+=2;
+              i += 2;
+              while (i < lines.length) {
+                let c = lines[i].trim();
+                if (c === "0") {
+                  let v = (lines[i + 1] || "").trim();
+                  if (v === "ENDBLK") {
+                    i += 2;
                     break;
                   }
-                  if (["LINE","CIRCLE","ARC","LWPOLYLINE","POLYLINE","TEXT","MTEXT","DIMENSION","HATCH","SPLINE","INSERT","ELLIPSE","3DFACE","SOLID","ATTRIB"].includes(v)) {
+                  if (["LINE", "CIRCLE", "ARC", "LWPOLYLINE", "POLYLINE", "TEXT", "MTEXT", "DIMENSION", "HATCH", "SPLINE", "INSERT", "ELLIPSE", "3DFACE", "SOLID", "ATTRIB"].includes(v)) {
                     let entRes = this.parseEntity(lines, i);
                     if (entRes) {
                       block.entities.push(entRes.entity);
@@ -1853,47 +1816,46 @@
                     }
                   }
                 }
-                let v=(lines[i+1]||"").trim();
-                if (c==="2") {
-                  block.name=v;
-                } else if (c==="10") {
-                  block.basePoint.x=parseFloat(v);
-                } else if (c==="20") {
-                  block.basePoint.y=parseFloat(v);
+                let v = (lines[i + 1] || "").trim();
+                if (c === "2") {
+                  block.name = v;
+                } else if (c === "10") {
+                  block.basePoint.x = parseFloat(v);
+                } else if (c === "20") {
+                  block.basePoint.y = parseFloat(v);
                 }
-                i+=2;
+                i += 2;
               }
               dxf.blocks[block.name] = block;
               continue;
             }
-            i+=2;
+            i += 2;
           }
           return i;
         }
-
         parseEntities(lines, i, dxf) {
-          while(i<lines.length) {
-            let code=lines[i].trim();
-            let value=(lines[i+1]||"").trim();
-            if (code==="0" && value==="ENDSEC") {
-              i+=2; break;
+          while (i < lines.length) {
+            let code = lines[i].trim();
+            let value = (lines[i + 1] || "").trim();
+            if (code === "0" && value === "ENDSEC") {
+              i += 2;
+              break;
             }
-            if (code==="0") {
-              let res=this.parseEntity(lines,i);
+            if (code === "0") {
+              let res = this.parseEntity(lines, i);
               if (res) {
-                let e=res.entity;
-                i=res.nextIndex;
-                // if it's INSERT, parse potential ATTRIB
-                if (e.type==="INSERT") {
-                  e.attribs=[];
-                  while(i<lines.length) {
-                    let c2=lines[i].trim();
-                    let v2=(lines[i+1]||"").trim();
-                    if (c2==="0" && v2==="ATTRIB") {
-                      let ar = this.parseEntity(lines,i);
+                let e = res.entity;
+                i = res.nextIndex;
+                if (e.type === "INSERT") {
+                  e.attribs = [];
+                  while (i < lines.length) {
+                    let c2 = lines[i].trim();
+                    let v2 = (lines[i + 1] || "").trim();
+                    if (c2 === "0" && v2 === "ATTRIB") {
+                      let ar = this.parseEntity(lines, i);
                       if (ar) {
                         e.attribs.push(ar.entity);
-                        i=ar.nextIndex;
+                        i = ar.nextIndex;
                         continue;
                       }
                     }
@@ -1904,42 +1866,39 @@
                 continue;
               }
             }
-            i+=2;
+            i += 2;
           }
           return i;
         }
-
         parseEntity(lines, i) {
-          if (i>=lines.length) return null;
+          if (i >= lines.length) return null;
           let code = lines[i].trim();
-          let value= (lines[i+1]||"").trim();
-          if (code!=="0") return null;
-          switch(value) {
-            case "LINE":       return DXFLine.parse(lines,i);
-            case "CIRCLE":     return DXFCircle.parse(lines,i);
-            case "ARC":        return DXFArc.parse(lines,i);
-            case "POLYLINE":   return DXFPolyline.parse(lines,i);
-            case "LWPOLYLINE": return DXFLwPolyline.parse(lines,i);
-            case "HATCH":      return DXFHatch.parse(lines,i);
-            case "DIMENSION":  return DXFDimension.parse(lines,i);
-            case "MTEXT":      return DXFMTEXT.parse(lines,i);
-            case "SPLINE":     return DXFSpline.parse(lines,i);
-            case "INSERT":     return DXFInsert.parse(lines,i);
+          let value = (lines[i + 1] || "").trim();
+          if (code !== "0") return null;
+          switch (value) {
+            case "LINE": return DXFLine.parse(lines, i);
+            case "CIRCLE": return DXFCircle.parse(lines, i);
+            case "ARC": return DXFArc.parse(lines, i);
+            case "POLYLINE": return DXFPolyline.parse(lines, i);
+            case "LWPOLYLINE": return DXFLwPolyline.parse(lines, i);
+            case "HATCH": return DXFHatch.parse(lines, i);
+            case "DIMENSION": return DXFDimension.parse(lines, i);
+            case "MTEXT": return DXFMTEXT.parse(lines, i);
+            case "SPLINE": return DXFSpline.parse(lines, i);
+            case "INSERT": return DXFInsert.parse(lines, i);
             case "TEXT":
-            case "ATTRIB":     return DXFText.parse(lines,i);
-            case "ELLIPSE":    return DXFEllipse.parse(lines,i);
-            case "3DFACE":     return DXF3DFace.parse(lines,i);
-            case "SOLID":      return DXFSolid.parse(lines,i);
-            default:
-              return GenericDXFEntity.parse(lines,i);
+            case "ATTRIB": return DXFText.parse(lines, i);
+            case "ELLIPSE": return DXFEllipse.parse(lines, i);
+            case "3DFACE": return DXF3DFace.parse(lines, i);
+            case "SOLID": return DXFSolid.parse(lines, i);
+            default: return GenericDXFEntity.parse(lines, i);
           }
         }
       }
 
       // ─────────────────────────────────────────────────────────────
-      // VIEWPORT
+      // VIEWPORT CLASS
       // ─────────────────────────────────────────────────────────────
-
       class Viewport {
         constructor(canvas) {
           this.canvas = canvas;
@@ -1956,31 +1915,31 @@
           this.viewOffsetY = this.baseOffsetY;
         }
         setInitialView(dxfDoc) {
-          let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
-          function considerPoint(x,y) {
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          function considerPoint(x, y) {
             if (isNaN(x) || isNaN(y)) return;
-            minX=Math.min(minX,x);
-            minY=Math.min(minY,y);
-            maxX=Math.max(maxX,x);
-            maxY=Math.max(maxY,y);
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x);
+            maxY = Math.max(maxY, y);
           }
           function processEntity(entity) {
-            switch(entity.type) {
+            switch (entity.type) {
               case "LINE":
                 considerPoint(entity.x1, entity.y1);
                 considerPoint(entity.x2, entity.y2);
                 break;
               case "CIRCLE":
-                considerPoint(entity.cx-entity.r, entity.cy-entity.r);
-                considerPoint(entity.cx+entity.r, entity.cy+entity.r);
+                considerPoint(entity.cx - entity.r, entity.cy - entity.r);
+                considerPoint(entity.cx + entity.r, entity.cy + entity.r);
                 break;
               case "ARC":
-                considerPoint(entity.cx-entity.r, entity.cy-entity.r);
-                considerPoint(entity.cx+entity.r, entity.cy+entity.r);
+                considerPoint(entity.cx - entity.r, entity.cy - entity.r);
+                considerPoint(entity.cx + entity.r, entity.cy + entity.r);
                 break;
               case "POLYLINE":
               case "LWPOLYLINE":
-                entity.vertices.forEach(v=>considerPoint(v.x,v.y));
+                entity.vertices.forEach(v => considerPoint(v.x, v.y));
                 break;
               case "TEXT":
               case "MTEXT":
@@ -1989,13 +1948,11 @@
                 if (entity.position) {
                   considerPoint(entity.position.x, entity.position.y);
                 }
-                // dimension might have p1, p2
                 if (entity.p1) considerPoint(entity.p1.x, entity.p1.y);
                 if (entity.p2) considerPoint(entity.p2.x, entity.p2.y);
                 break;
               case "HATCH":
-                // boundary loops
-                entity.boundary.forEach(loop => {
+                entity.boundaryLoops.forEach(loop => {
                   loop.forEach(pt => considerPoint(pt.x, pt.y));
                 });
                 break;
@@ -2003,63 +1960,55 @@
                 considerPoint(entity.insertionPoint.x, entity.insertionPoint.y);
                 break;
               case "SPLINE":
-                entity.fitPoints.forEach(pt=>considerPoint(pt.x,pt.y));
-                entity.controlPoints.forEach(pt=>considerPoint(pt.x,pt.y));
+                entity.fitPoints.forEach(pt => considerPoint(pt.x, pt.y));
+                entity.controlPoints.forEach(pt => considerPoint(pt.x, pt.y));
                 break;
               case "ELLIPSE":
                 {
-                  let rx = Math.sqrt(entity.mx*entity.mx+ entity.my*entity.my);
-                  let ry = rx* (entity.ratio||1);
-                  considerPoint(entity.cx-rx, entity.cy-ry);
-                  considerPoint(entity.cx+rx, entity.cy+ry);
+                  let rx = Math.sqrt(entity.mx * entity.mx + entity.my * entity.my);
+                  let ry = rx * (entity.ratio || 1);
+                  considerPoint(entity.cx - rx, entity.cy - ry);
+                  considerPoint(entity.cx + rx, entity.cy + ry);
                 }
                 break;
               case "3DFACE":
               case "SOLID":
-                entity.points.forEach(pt=>considerPoint(pt.x, pt.y));
+                entity.points.forEach(pt => considerPoint(pt.x, pt.y));
                 break;
               default:
                 break;
             }
           }
-          dxfDoc.entities.forEach(e=>processEntity(e));
+          dxfDoc.entities.forEach(e => processEntity(e));
           for (let name in dxfDoc.blocks) {
             let block = dxfDoc.blocks[name];
             considerPoint(block.basePoint.x, block.basePoint.y);
-            block.entities.forEach(be=>processEntity(be));
+            block.entities.forEach(be => processEntity(be));
           }
-          if (minX===Infinity) {
-            minX=-100; minY=-100; maxX=100; maxY=100;
+          if (minX === Infinity) {
+            minX = -100; minY = -100; maxX = 100; maxY = 100;
           }
-          let dw = maxX-minX, dh = maxY-minY;
-          let sx = this.canvas.width/dw, sy = this.canvas.height/dh;
-          this.baseScale = 0.9*Math.min(sx, sy);
-          let cx = (minX+maxX)/2, cy=(minY+maxY)/2;
+          let dw = maxX - minX, dh = maxY - minY;
+          let sx = this.canvas.width / dw, sy = this.canvas.height / dh;
+          this.baseScale = 0.9 * Math.min(sx, sy);
+          let cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
           this.viewScale = this.baseScale;
-          this.baseOffsetX = this.canvas.width/2 - this.baseScale*cx;
-          // note the minus sign for Y because we flip
-          this.baseOffsetY = this.canvas.height/2 + this.baseScale*cy;
+          this.baseOffsetX = this.canvas.width / 2 - this.baseScale * cx;
+          this.baseOffsetY = this.canvas.height / 2 + this.baseScale * cy;
           this.viewOffsetX = this.baseOffsetX;
           this.viewOffsetY = this.baseOffsetY;
         }
-        worldToScreen(x,y) {
-          return {
-            x: this.viewScale*x + this.viewOffsetX,
-            y: -this.viewScale*y + this.viewOffsetY
-          };
+        worldToScreen(x, y) {
+          return { x: this.viewScale * x + this.viewOffsetX, y: -this.viewScale * y + this.viewOffsetY };
         }
         screenToWorld(sx, sy) {
-          return {
-            x: (sx - this.viewOffsetX)/this.viewScale,
-            y: - (sy - this.viewOffsetY)/this.viewScale
-          };
+          return { x: (sx - this.viewOffsetX) / this.viewScale, y: -(sy - this.viewOffsetY) / this.viewScale };
         }
       }
 
       // ─────────────────────────────────────────────────────────────
-      // VIEWER
+      // DXF VIEWER CLASS
       // ─────────────────────────────────────────────────────────────
-
       class DXFViewer {
         constructor(canvas) {
           this.canvas = canvas;
@@ -2069,10 +2018,10 @@
           this.parser = new DXFParser();
           this.gridEnabled = false;
           this.isPanning = false;
-          this.lastPanPoint = {x:0,y:0};
+          this.lastPanPoint = { x: 0, y: 0 };
           this.ongoingTouches = [];
-          this.lastTouchDistance=null;
-          this.lastTouchCenter=null;
+          this.lastTouchDistance = null;
+          this.lastTouchCenter = null;
           this.registerEventHandlers();
           window.addEventListener("resize", () => this.onResize());
           this.onResize();
@@ -2080,14 +2029,14 @@
         onResize() {
           this.canvas.width = window.innerWidth;
           this.canvas.height = window.innerHeight;
-          if (this.dxfDoc.entities.length>0) {
+          if (this.dxfDoc.entities.length > 0) {
             this.viewport.setInitialView(this.dxfDoc);
           }
           this.draw();
         }
         loadDXF(text) {
           let dxfParsed = this.parser.parse(text);
-          if (dxfParsed.entities.length===0 && Object.keys(dxfParsed.blocks).length===0) {
+          if (dxfParsed.entities.length === 0 && Object.keys(dxfParsed.blocks).length === 0) {
             alert("No supported entities found in DXF.");
             return;
           }
@@ -2105,13 +2054,11 @@
         }
         draw() {
           let ctx = this.ctx;
-          // Clear
           ctx.save();
-          ctx.setTransform(1,0,0,1,0,0);
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
           ctx.fillStyle = "#000";
-          ctx.fillRect(0,0,this.canvas.width, this.canvas.height);
+          ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
           ctx.restore();
-          // apply transform
           ctx.setTransform(
             this.viewport.viewScale, 0,
             0, -this.viewport.viewScale,
@@ -2121,32 +2068,31 @@
           if (this.gridEnabled) {
             this.drawGrid();
           }
-          // draw entities
-          this.dxfDoc.entities.forEach(entity=>{
-            if (renderSettings.entity[entity.type]!==false) {
+          this.dxfDoc.entities.forEach(entity => {
+            if (renderSettings.entity[entity.type] !== false) {
               entity.draw(ctx, this.viewport, this.dxfDoc);
             }
           });
-          ctx.setTransform(1,0,0,1,0,0);
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
         }
         drawGrid() {
           let spacing = getNiceGridSpacing(this.viewport);
-          let tl = this.viewport.screenToWorld(0,0);
+          let tl = this.viewport.screenToWorld(0, 0);
           let br = this.viewport.screenToWorld(this.canvas.width, this.canvas.height);
-          let startX = Math.floor(tl.x/spacing)*spacing;
-          let endX   = Math.ceil(br.x/spacing)*spacing;
-          let startY = Math.floor(br.y/spacing)*spacing;
-          let endY   = Math.ceil(tl.y/spacing)*spacing;
-          let ctx=this.ctx;
+          let startX = Math.floor(tl.x / spacing) * spacing;
+          let endX = Math.ceil(br.x / spacing) * spacing;
+          let startY = Math.floor(br.y / spacing) * spacing;
+          let endY = Math.ceil(tl.y / spacing) * spacing;
+          let ctx = this.ctx;
           ctx.save();
-          ctx.lineWidth = 1/this.viewport.viewScale;
-          ctx.strokeStyle="#444";
+          ctx.lineWidth = 1 / this.viewport.viewScale;
+          ctx.strokeStyle = "#444";
           ctx.beginPath();
-          for (let x=startX; x<=endX; x+=spacing) {
+          for (let x = startX; x <= endX; x += spacing) {
             ctx.moveTo(x, startY);
             ctx.lineTo(x, endY);
           }
-          for (let y=startY; y<=endY; y+=spacing) {
+          for (let y = startY; y <= endY; y += spacing) {
             ctx.moveTo(startX, y);
             ctx.lineTo(endX, y);
           }
@@ -2154,89 +2100,83 @@
           ctx.restore();
         }
         registerEventHandlers() {
-          // Mouse
-          this.canvas.addEventListener("mousedown",(e)=>{
-            this.isPanning=true;
-            this.lastPanPoint={x:e.clientX,y:e.clientY};
+          this.canvas.addEventListener("mousedown", (e) => {
+            this.isPanning = true;
+            this.lastPanPoint = { x: e.clientX, y: e.clientY };
           });
-          this.canvas.addEventListener("mousemove",(e)=>{
+          this.canvas.addEventListener("mousemove", (e) => {
             if (this.isPanning) {
-              let dx=e.clientX - this.lastPanPoint.x;
-              let dy=e.clientY - this.lastPanPoint.y;
-              this.lastPanPoint={x:e.clientX,y:e.clientY};
+              let dx = e.clientX - this.lastPanPoint.x;
+              let dy = e.clientY - this.lastPanPoint.y;
+              this.lastPanPoint = { x: e.clientX, y: e.clientY };
               this.viewport.viewOffsetX += dx;
               this.viewport.viewOffsetY += dy;
               this.draw();
             }
           });
-          this.canvas.addEventListener("mouseup", ()=>{this.isPanning=false;});
-          this.canvas.addEventListener("mouseleave", ()=>{this.isPanning=false;});
-          this.canvas.addEventListener("wheel",(e)=>{
+          this.canvas.addEventListener("mouseup", () => { this.isPanning = false; });
+          this.canvas.addEventListener("mouseleave", () => { this.isPanning = false; });
+          this.canvas.addEventListener("wheel", (e) => {
             e.preventDefault();
-            const zoomIntensity=0.001;
-            let factor=1- e.deltaY*zoomIntensity;
-            let mx=e.clientX, my=e.clientY;
-            this.viewport.viewOffsetX = mx - factor*(mx - this.viewport.viewOffsetX);
-            this.viewport.viewOffsetY = my - factor*(my - this.viewport.viewOffsetY);
+            const zoomIntensity = 0.001;
+            let factor = 1 - e.deltaY * zoomIntensity;
+            let mx = e.clientX, my = e.clientY;
+            this.viewport.viewOffsetX = mx - factor * (mx - this.viewport.viewOffsetX);
+            this.viewport.viewOffsetY = my - factor * (my - this.viewport.viewOffsetY);
             this.viewport.viewScale *= factor;
             this.draw();
-          },{passive:false});
-
-          // Touch
-          this.canvas.addEventListener("touchstart",(e)=>this.handleTouchStart(e), {passive:false});
-          this.canvas.addEventListener("touchmove",(e)=>this.handleTouchMove(e), {passive:false});
-          this.canvas.addEventListener("touchend",(e)=>this.handleTouchEnd(e), {passive:false});
-          this.canvas.addEventListener("touchcancel",(e)=>this.handleTouchEnd(e), {passive:false});
+          }, { passive: false });
+          this.canvas.addEventListener("touchstart", (e) => this.handleTouchStart(e), { passive: false });
+          this.canvas.addEventListener("touchmove", (e) => this.handleTouchMove(e), { passive: false });
+          this.canvas.addEventListener("touchend", (e) => this.handleTouchEnd(e), { passive: false });
+          this.canvas.addEventListener("touchcancel", (e) => this.handleTouchEnd(e), { passive: false });
         }
         getTouchPos(evt) {
-          let rect=this.canvas.getBoundingClientRect();
-          return Array.from(evt.touches).map(t=>({
-            x: t.clientX - rect.left,
-            y: t.clientY - rect.top
-          }));
+          let rect = this.canvas.getBoundingClientRect();
+          return Array.from(evt.touches).map(t => ({ x: t.clientX - rect.left, y: t.clientY - rect.top }));
         }
-        handleTouchStart(evt){
+        handleTouchStart(evt) {
           evt.preventDefault();
-          let touches=this.getTouchPos(evt);
-          this.ongoingTouches=touches;
-          if (touches.length===2) {
-            this.lastTouchDistance = getDistance(touches[0],touches[1]);
-            this.lastTouchCenter = getCenter(touches[0],touches[1]);
-          } else if (touches.length===1){
+          let touches = this.getTouchPos(evt);
+          this.ongoingTouches = touches;
+          if (touches.length === 2) {
+            this.lastTouchDistance = getDistance(touches[0], touches[1]);
+            this.lastTouchCenter = getCenter(touches[0], touches[1]);
+          } else if (touches.length === 1) {
             this.lastPanPoint = touches[0];
           }
         }
-        handleTouchMove(evt){
+        handleTouchMove(evt) {
           evt.preventDefault();
-          let touches=this.getTouchPos(evt);
-          if (touches.length===2 && this.ongoingTouches.length>=2) {
-            let newDist = getDistance(touches[0],touches[1]);
+          let touches = this.getTouchPos(evt);
+          if (touches.length === 2 && this.ongoingTouches.length >= 2) {
+            let newDist = getDistance(touches[0], touches[1]);
             let factor = newDist / this.lastTouchDistance;
-            let newCenter=getCenter(touches[0],touches[1]);
-            this.viewport.viewOffsetX = newCenter.x - factor*(newCenter.x - this.viewport.viewOffsetX);
-            this.viewport.viewOffsetY = newCenter.y - factor*(newCenter.y - this.viewport.viewOffsetY);
+            let newCenter = getCenter(touches[0], touches[1]);
+            this.viewport.viewOffsetX = newCenter.x - factor * (newCenter.x - this.viewport.viewOffsetX);
+            this.viewport.viewOffsetY = newCenter.y - factor * (newCenter.y - this.viewport.viewOffsetY);
             this.viewport.viewScale *= factor;
-            this.lastTouchDistance=newDist;
-            this.lastTouchCenter=newCenter;
-          } else if (touches.length===1 && this.ongoingTouches.length===1) {
-            let dx=touches[0].x - this.lastPanPoint.x;
-            let dy=touches[0].y - this.lastPanPoint.y;
+            this.lastTouchDistance = newDist;
+            this.lastTouchCenter = newCenter;
+          } else if (touches.length === 1 && this.ongoingTouches.length === 1) {
+            let dx = touches[0].x - this.lastPanPoint.x;
+            let dy = touches[0].y - this.lastPanPoint.y;
             this.viewport.viewOffsetX += dx;
             this.viewport.viewOffsetY += dy;
-            this.lastPanPoint=touches[0];
+            this.lastPanPoint = touches[0];
           }
-          this.ongoingTouches=touches;
+          this.ongoingTouches = touches;
           this.draw();
         }
-        handleTouchEnd(evt){
+        handleTouchEnd(evt) {
           evt.preventDefault();
-          let touches=this.getTouchPos(evt);
-          this.ongoingTouches=touches;
-          if (touches.length<2) {
-            this.lastTouchDistance=null;
-            this.lastTouchCenter=null;
+          let touches = this.getTouchPos(evt);
+          this.ongoingTouches = touches;
+          if (touches.length < 2) {
+            this.lastTouchDistance = null;
+            this.lastTouchCenter = null;
           }
-          if (touches.length===0) this.isPanning=false;
+          if (touches.length === 0) this.isPanning = false;
         }
       }
 
@@ -2246,28 +2186,24 @@
       const canvas = document.getElementById("canvas");
       const viewer = new DXFViewer(canvas);
 
-      document.getElementById("dxfFile").addEventListener("change", function(e){
-        const file=e.target.files[0];
+      document.getElementById("dxfFile").addEventListener("change", function (e) {
+        const file = e.target.files[0];
         if (!file) return;
-        const reader=new FileReader();
-        reader.onload=function(event){
-          const text=event.target.result;
+        const reader = new FileReader();
+        reader.onload = function (event) {
+          const text = event.target.result;
           viewer.loadDXF(text);
         };
         reader.readAsText(file);
       });
-
-      document.getElementById("resetView").addEventListener("click",()=> viewer.resetView());
-      document.getElementById("toggleGrid").addEventListener("click",()=> viewer.toggleGrid());
-
+      document.getElementById("resetView").addEventListener("click", () => viewer.resetView());
+      document.getElementById("toggleGrid").addEventListener("click", () => viewer.toggleGrid());
       document.getElementById("toggleEntityOptions").addEventListener("click", () => {
         document.getElementById("entityOptionsOverlay").style.display = "block";
       });
       document.getElementById("toggleOtherOptions").addEventListener("click", () => {
         document.getElementById("otherOptionsOverlay").style.display = "block";
       });
-
-      // Close overlay when clicking outside popup content
       document.getElementById("entityOptionsOverlay").addEventListener("click", (e) => {
         if (e.target === document.getElementById("entityOptionsOverlay")) {
           document.getElementById("entityOptionsOverlay").style.display = "none";
@@ -2278,20 +2214,15 @@
           document.getElementById("otherOptionsOverlay").style.display = "none";
         }
       });
-      // Prevent clicks inside popup from closing overlay
       document.getElementById("entityOptionsPopup").addEventListener("click", e => e.stopPropagation());
       document.getElementById("otherOptionsPopup").addEventListener("click", e => e.stopPropagation());
-      
-      // entity toggles
-      document.querySelectorAll(".entity-toggle").forEach(checkbox=>{
-        checkbox.addEventListener("change",function(e){
+      document.querySelectorAll(".entity-toggle").forEach(checkbox => {
+        checkbox.addEventListener("change", function (e) {
           const type = e.target.getAttribute("data-type");
           renderSettings.entity[type] = e.target.checked;
           viewer.draw();
         });
       });
-      
-      // "Select All" and "Select None" buttons for entities
       document.getElementById("selectAllEntities").addEventListener("click", () => {
         document.querySelectorAll(".entity-toggle").forEach(cb => {
           cb.checked = true;
@@ -2308,30 +2239,26 @@
         });
         viewer.draw();
       });
-      
-      // rendering option toggles
-      document.getElementById("toggleLinetype").addEventListener("change",function(e){
-        renderSettings.renderLinetype=!e.target.checked;
+      document.getElementById("toggleLinetype").addEventListener("change", function (e) {
+        renderSettings.renderLinetype = !e.target.checked;
         viewer.draw();
       });
-      document.getElementById("toggleColor").addEventListener("change",function(e){
-        renderSettings.renderColor=!e.target.checked;
+      document.getElementById("toggleColor").addEventListener("change", function (e) {
+        renderSettings.renderColor = !e.target.checked;
         viewer.draw();
       });
-      document.getElementById("toggleThickness").addEventListener("change",function(e){
-        renderSettings.renderThickness=!e.target.checked;
+      document.getElementById("toggleThickness").addEventListener("change", function (e) {
+        renderSettings.renderThickness = !e.target.checked;
         viewer.draw();
       });
-      document.getElementById("toggleWidth").addEventListener("change",function(e){
-        renderSettings.renderWidth=!e.target.checked;
+      document.getElementById("toggleWidth").addEventListener("change", function (e) {
+        renderSettings.renderWidth = !e.target.checked;
         viewer.draw();
       });
-      document.getElementById("toggleTransparency").addEventListener("change",function(e){
-        renderSettings.renderTransparency=!e.target.checked;
+      document.getElementById("toggleTransparency").addEventListener("change", function (e) {
+        renderSettings.renderTransparency = !e.target.checked;
         viewer.draw();
       });
-
-      // Initial
       viewer.draw();
     </script>
   </body>
