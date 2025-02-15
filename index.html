@@ -996,28 +996,41 @@
             // Pattern hatch: first clip to the hatch boundary.
             this.drawLoopsPath(ctx);
             ctx.clip();
+
             let bbox = computeBBox(this.boundaryLoops);
             let patternAngleRad = DXFUtils.degToRad(this.patternAngle);
             let spacing = (this.patternScale || 1) * 10;
-            // Compute the rotated bounding box (in pattern space).
+
+            // Use the lower–left corner of the bounding box as the pattern origin.
+            let origin = { x: bbox.minX, y: bbox.minY };
+
+            // Compute the rotated bounding box in pattern space (relative to the origin).
             let corners = [
               { x: bbox.minX, y: bbox.minY },
               { x: bbox.maxX, y: bbox.minY },
               { x: bbox.maxX, y: bbox.maxY },
               { x: bbox.minX, y: bbox.maxY }
-            ];
-            let rotatedCorners = corners.map(pt => DXFUtils.rotatePoint(pt.x, pt.y, -patternAngleRad));
-            let rMinX = Math.min(...rotatedCorners.map(p => p.x));
-            let rMaxX = Math.max(...rotatedCorners.map(p => p.x));
-            let rMinY = Math.min(...rotatedCorners.map(p => p.y));
-            let rMaxY = Math.max(...rotatedCorners.map(p => p.y));
+            ].map(pt => {
+              // Translate to origin then rotate
+              return DXFUtils.rotatePoint(pt.x - origin.x, pt.y - origin.y, -patternAngleRad);
+            });
+            let rMinX = Math.min(...corners.map(p => p.x));
+            let rMaxX = Math.max(...corners.map(p => p.x));
+            let rMinY = Math.min(...corners.map(p => p.y));
+            let rMaxY = Math.max(...corners.map(p => p.y));
+
+            // Snap the starting Y value to a multiple of spacing.
+            let startY = Math.floor(rMinY / spacing) * spacing;
+
             ctx.beginPath();
-            // Draw horizontal lines in pattern space, then rotate back to world space.
-            for (let rY = rMinY - spacing; rY <= rMaxY + spacing; rY += spacing) {
-              let start = DXFUtils.rotatePoint(rMinX, rY, patternAngleRad);
-              let end = DXFUtils.rotatePoint(rMaxX, rY, patternAngleRad);
-              ctx.moveTo(start.x, start.y);
-              ctx.lineTo(end.x, end.y);
+            // Draw horizontal lines in pattern space, then rotate back and translate by origin.
+            for (let rY = startY; rY <= rMaxY + spacing; rY += spacing) {
+              let startPt = DXFUtils.rotatePoint(rMinX, rY, patternAngleRad);
+              let endPt   = DXFUtils.rotatePoint(rMaxX, rY, patternAngleRad);
+              startPt.x += origin.x; startPt.y += origin.y;
+              endPt.x   += origin.x; endPt.y   += origin.y;
+              ctx.moveTo(startPt.x, startPt.y);
+              ctx.lineTo(endPt.x, endPt.y);
             }
             ctx.strokeStyle = fillColor;
             ctx.lineWidth = 1 / viewport.viewScale;
