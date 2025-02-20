@@ -2336,15 +2336,19 @@
           this.viewport.setInitialView(this.dxfDoc);
           this.draw();
         }
-        // New helper: filter entities by layout flag (group code "67")
+        // Updated helper: filter entities by layout flag (group code "67")
         shouldRender(entity) {
+          // Force VIEWPORT entities to render only in paper space
+          if (entity.type === "VIEWPORT") {
+            return this.activeLayout === "paper";
+          }
           const flag = entity.raw["67"];
           if (this.activeLayout === "model") {
-            // Model space: either no flag or flag === "0"
-            return (!flag || flag === "0");
+            // Model space: render if flag is undefined or equals 0
+            return (!flag || parseInt(flag, 10) === 0);
           } else if (this.activeLayout === "paper") {
-            // Paper space: flag === "1"
-            return flag === "1";
+            // Paper space: render only if flag exists and equals 1
+            return (flag !== undefined && parseInt(flag, 10) === 1);
           }
           return true;
         }
