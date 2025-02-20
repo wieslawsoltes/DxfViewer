@@ -51,6 +51,45 @@
         display: block;
         touch-action: none;
       }
+      /* New: Entity List panel styling */
+      #entityList {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        z-index: 100;
+        background: rgba(255, 255, 255, 0.95);
+        padding: 10px;
+        border-radius: 4px;
+        box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);
+        max-height: 90%;
+        overflow-y: auto;
+        font-size: 12px;
+      }
+      #entityList ul {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
+      #entityList li {
+        padding: 4px 6px;
+        cursor: pointer;
+        border-bottom: 1px solid #ccc;
+      }
+      #entityList li:hover {
+        background: #eee;
+      }
+      /* New: Tooltip styling */
+      #entityTooltip {
+        position: absolute;
+        pointer-events: none;
+        background: rgba(255, 255, 255, 0.9);
+        padding: 4px;
+        border: 1px solid #ccc;
+        border-radius: 3px;
+        font-size: 12px;
+        display: none;
+        z-index: 150;
+      }
     </style>
   </head>
   <body>
@@ -78,6 +117,12 @@
       </div>
     </div>
 
+    <!-- New: Entity List panel -->
+    <div id="entityList">
+      <strong>Entities</strong>
+      <ul></ul>
+    </div>
+    
     <!-- Overlays for popups -->
     <div id="entityOptionsOverlay" class="optionsOverlay">
       <div id="entityOptionsPopup" class="popupContent">
@@ -157,6 +202,9 @@
         </label><br />
       </div>
     </div>
+
+    <!-- New: Tooltip element -->
+    <div id="entityTooltip"></div>
 
     <canvas id="canvas"></canvas>
 
@@ -2397,6 +2445,7 @@
           }
           this.dxfDoc = dxfParsed;
           this.viewport.setInitialView(this.dxfDoc);
+          this.updateEntityList();
           this.draw();
         }
         toggleGrid() {
@@ -2549,6 +2598,131 @@
           }
           if (touches.length === 0) this.isPanning = false;
         }
+        // New: Zoom to a given entity based on its bounding box
+        zoomToEntity(entity) {
+          let bbox = getEntityBBox(entity);
+          if (!bbox) return;
+          const margin = 20;
+          const canvasWidth = this.canvas.width;
+          const canvasHeight = this.canvas.height;
+          const entityWidth = bbox.maxX - bbox.minX || 1;
+          const entityHeight = bbox.maxY - bbox.minY || 1;
+          const scaleX = (canvasWidth - margin * 2) / entityWidth;
+          const scaleY = (canvasHeight - margin * 2) / entityHeight;
+          const newScale = Math.min(scaleX, scaleY);
+          const cx = (bbox.minX + bbox.maxX) / 2;
+          const cy = (bbox.minY + bbox.maxY) / 2;
+          this.viewport.viewScale = newScale;
+          this.viewport.viewOffsetX = canvasWidth / 2 - newScale * cx;
+          this.viewport.viewOffsetY = canvasHeight / 2 + newScale * cy;
+          this.draw();
+        }
+        // New: Update the entity list in the UI panel
+        updateEntityList() {
+          let entityListEl = document.getElementById("entityList");
+          let ul = entityListEl.querySelector("ul");
+          ul.innerHTML = "";
+          this.dxfDoc.entities.forEach((entity, index) => {
+            // Only list entities that are currently set to render.
+            if (!renderSettings.entity[entity.type]) return;
+            let li = document.createElement("li");
+            li.textContent = entity.type;
+            let layer = entity.raw["8"] || "default";
+            let handle = entity.raw["5"] || "";
+            li.title = `Type: ${entity.type}\nLayer: ${layer}\nHandle: ${handle}`;
+            li.addEventListener("click", () => {
+              this.zoomToEntity(entity);
+            });
+            ul.appendChild(li);
+          });
+        }
+      }
+
+            // ─────────────────────────────────────────────────────────────
+      // Helper: Compute a simple bounding box for an entity
+      // ─────────────────────────────────────────────────────────────
+      function getEntityBBox(entity) {
+        switch(entity.type) {
+          case "LINE":
+            return {
+              minX: Math.min(entity.x1, entity.x2),
+              maxX: Math.max(entity.x1, entity.x2),
+              minY: Math.min(entity.y1, entity.y2),
+              maxY: Math.max(entity.y1, entity.y2)
+            };
+          case "CIRCLE":
+            return {
+              minX: entity.cx - entity.r,
+              maxX: entity.cx + entity.r,
+              minY: entity.cy - entity.r,
+              maxY: entity.cy + entity.r
+            };
+          case "ARC":
+            let startRad = DXFUtils.degToRad(entity.startAngle);
+            let endRad = DXFUtils.degToRad(entity.endAngle);
+            let p1 = { x: entity.cx + entity.r * Math.cos(startRad), y: entity.cy + entity.r * Math.sin(startRad) };
+            let p2 = { x: entity.cx + entity.r * Math.cos(endRad), y: entity.cy + entity.r * Math.sin(endRad) };
+            return {
+              minX: Math.min(entity.cx - entity.r, p1.x, p2.x),
+              maxX: Math.max(entity.cx + entity.r, p1.x, p2.x),
+              minY: Math.min(entity.cy - entity.r, p1.y, p2.y),
+              maxY: Math.max(entity.cy + entity.r, p1.y, p2.y)
+            };
+          case "POLYLINE":
+          case "LWPOLYLINE":
+            if (entity.vertices && entity.vertices.length > 0) {
+              let xs = entity.vertices.map(v => v.x);
+              let ys = entity.vertices.map(v => v.y);
+              return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
+            }
+            break;
+          case "HATCH":
+            if (entity.boundaryLoops && entity.boundaryLoops.length > 0) {
+              return computeBBox(entity.boundaryLoops);
+            }
+            break;
+          case "DIMENSION":
+            return {
+              minX: Math.min(entity.p1.x, entity.p2.x),
+              maxX: Math.max(entity.p1.x, entity.p2.x),
+              minY: Math.min(entity.p1.y, entity.p2.y),
+              maxY: Math.max(entity.p1.y, entity.p2.y)
+            };
+          case "MTEXT":
+          case "TEXT":
+          case "ATTRIB":
+            return { minX: entity.position.x, maxX: entity.position.x, minY: entity.position.y, maxY: entity.position.y };
+          case "SPLINE":
+            if (entity.fitPoints && entity.fitPoints.length > 0) {
+              let xs = entity.fitPoints.map(v => v.x);
+              let ys = entity.fitPoints.map(v => v.y);
+              return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
+            }
+            break;
+          case "INSERT":
+            return { minX: entity.insertionPoint.x, maxX: entity.insertionPoint.x, minY: entity.insertionPoint.y, maxY: entity.insertionPoint.y };
+          case "ELLIPSE":
+            let rx = Math.sqrt(entity.mx * entity.mx + entity.my * entity.my);
+            let ry = rx * (entity.ratio || 1);
+            return { minX: entity.cx - rx, maxX: entity.cx + rx, minY: entity.cy - ry, maxY: entity.cy + ry };
+          case "3DFACE":
+          case "SOLID":
+            if (entity.points && entity.points.length > 0) {
+              let xs = entity.points.map(p => p.x);
+              let ys = entity.points.map(p => p.y);
+              return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
+            }
+          case "VIEWPORT":
+            return {
+              minX: entity.lowerLeft.x,
+              maxX: entity.upperRight.x,
+              minY: entity.lowerLeft.y,
+              maxY: entity.upperRight.y
+            };
+          default:
+            return null;
+        }
+        return null;
       }
 
       // ─────────────────────────────────────────────────────────────
@@ -2597,6 +2771,7 @@
           const type = e.target.getAttribute("data-type");
           renderSettings.entity[type] = e.target.checked;
           viewer.draw();
+          viewer.updateEntityList();
         });
       });
       document.getElementById("selectAllEntities").addEventListener("click", () => {
@@ -2606,6 +2781,7 @@
           renderSettings.entity[type] = true;
         });
         viewer.draw();
+        viewer.updateEntityList();
       });
       document.getElementById("deselectAllEntities").addEventListener("click", () => {
         document.querySelectorAll(".entity-toggle").forEach(cb => {
@@ -2614,6 +2790,7 @@
           renderSettings.entity[type] = false;
         });
         viewer.draw();
+        viewer.updateEntityList();
       });
       document.getElementById("toggleLinetype").addEventListener("change", function (e) {
         renderSettings.renderLinetype = !e.target.checked;
@@ -2636,6 +2813,37 @@
         viewer.draw();
       });
       viewer.draw();
+      
+       // New: Add canvas mousemove listener to show tooltip for entity under pointer
+      canvas.addEventListener("mousemove", (e) => {
+        if (!viewer.isPanning) {
+          let rect = canvas.getBoundingClientRect();
+          let mouseX = e.clientX - rect.left;
+          let mouseY = e.clientY - rect.top;
+          let worldPos = viewer.viewport.screenToWorld(mouseX, mouseY);
+          let hoveredEntity = null;
+          for (let entity of viewer.dxfDoc.entities) {
+            let bbox = getEntityBBox(entity);
+            if (bbox &&
+                worldPos.x >= bbox.minX && worldPos.x <= bbox.maxX &&
+                worldPos.y >= bbox.minY && worldPos.y <= bbox.maxY) {
+              hoveredEntity = entity;
+              break;
+            }
+          }
+          let tooltip = document.getElementById("entityTooltip");
+          if (hoveredEntity) {
+            let layer = hoveredEntity.raw["8"] || "default";
+            let handle = hoveredEntity.raw["5"] || "";
+            tooltip.textContent = `Type: ${hoveredEntity.type}, Layer: ${layer}, Handle: ${handle}`;
+            tooltip.style.display = "block";
+            tooltip.style.left = e.clientX + 10 + "px";
+            tooltip.style.top = e.clientY + 10 + "px";
+          } else {
+            tooltip.style.display = "none";
+          }
+        }
+      });
     </script>
   </body>
 </html>
