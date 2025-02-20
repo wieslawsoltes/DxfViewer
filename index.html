@@ -1499,17 +1499,37 @@
             if (code === "0") break;
             let value = (lines[i + 1] || "").trim();
             switch (code) {
-              case "2": insert.blockName = value; break;
-              case "10": insert.insertionPoint.x = parseFloat(value); break;
-              case "20": insert.insertionPoint.y = parseFloat(value); break;
-              case "41": insert.scale.x = parseFloat(value); break;
-              case "42": insert.scale.y = parseFloat(value); break;
-              case "50": insert.rotation = parseFloat(value); break;
+              case "2":
+                insert.blockName = value;
+                break;
+              case "10":
+                insert.insertionPoint.x = parseFloat(value);
+                break;
+              case "20":
+                insert.insertionPoint.y = parseFloat(value);
+                break;
+              case "41":
+                insert.scale.x = parseFloat(value);
+                break;
+              case "42":
+                insert.scale.y = parseFloat(value);
+                break;
+              case "50":
+                insert.rotation = parseFloat(value);
+                break;
+              case "67":
+                // Read the paper/model space flag so that shouldRender works correctly.
+                insert.raw["67"] = value;
+                break;
               default:
                 insert.raw[code] = value;
                 break;
             }
             i += 2;
+          }
+          // If only one scale factor is provided (non-default in x, default in y), then use uniform scaling.
+          if (insert.scale.x !== 1 && insert.scale.y === 1) {
+            insert.scale.y = insert.scale.x;
           }
           return { entity: insert, nextIndex: i };
         }
@@ -1523,6 +1543,7 @@
           let { x: scaleX, y: scaleY } = this.scale;
           let angle = DXFUtils.degToRad(this.rotation);
           let bp = block.basePoint || { x: 0, y: 0 };
+          // Apply the transformation: T(insertion) * R(rotation) * S(scale) * T(-basePoint)
           ctx.translate(insX, insY);
           ctx.rotate(angle);
           ctx.scale(scaleX, scaleY);
