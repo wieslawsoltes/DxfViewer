@@ -246,10 +246,13 @@
       }
 
       // ─────────────────────────────────────────────────────────────
-      // MTEXT Parsing Helpers
+      // MTEXT Parsing Helpers (Enhanced)
       // ─────────────────────────────────────────────────────────────
       function parseMTEXTContent(rawText, defaultSize, defaultFont, defaultColor) {
-        rawText = rawText.replace(/%%d/g, "°").replace(/%%c/g, "Ø");
+        // Replace special sequences and convert \P to newline for paragraph breaks.
+        rawText = rawText.replace(/%%d/g, "°")
+                         .replace(/%%c/g, "Ø")
+                         .replace(/\\P/g, "\n");
         let defaultStyle = {
           scale: 1,
           font: defaultFont,
@@ -289,6 +292,7 @@
                 segments.push({ paragraphBreak: true });
                 currentSegment = { text: "", style: Object.assign({}, currentStyle) };
               } else if (nextChar === 'M') {
+                // ignore if not implemented
               } else {
                 currentSegment.text += '▯' + nextChar;
               }
@@ -529,7 +533,7 @@
       }
 
       // ─────────────────────────────────────────────────────────────
-      // DXF Style Helpers
+      // DXF Style Helpers (including improved color & linetype)
       // ─────────────────────────────────────────────────────────────
       class DXFStyle {
         static ACI_COLORS = {
@@ -547,7 +551,7 @@
         static getEntityColor(entity, dxfDoc) {
           if (!renderSettings.renderColor) return DXFStyle.ACI_COLORS[7];
           if (entity.raw["420"]) {
-            let tc = parseInt(entity.raw["420"]);
+            let tc = parseInt(entity.raw["420"], 10);
             let hex = tc.toString(16).padStart(6, "0");
             return "#" + hex;
           }
@@ -1146,6 +1150,7 @@
         draw(ctx, viewport, dxfDoc) {
           if (!renderSettings.entity["DIMENSION"]) return;
           this.applyStyle(ctx, viewport, dxfDoc);
+
           let p1 = this.p1, p2 = this.p2;
           let dx = p2.x - p1.x, dy = p2.y - p1.y;
           let baselineLength = Math.sqrt(dx * dx + dy * dy);
@@ -1153,16 +1158,34 @@
             ctx.globalAlpha = 1;
             return;
           }
+
+          // Unit vector along dimension line
           let u = { x: dx / baselineLength, y: dy / baselineLength };
+          // Perp vector
           let v = { x: -u.y, y: u.x };
+
           let mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
-          let offsetDistance = 5;
+          let offsetDistance = 5; // default offset in world coords
+
+          // If we have a definition point, measure offset from dimension line midpoint
           if (this.defPt) {
             let mx = mid.x, my = mid.y;
             offsetDistance = (this.defPt.x - mx) * v.x + (this.defPt.y - my) * v.y;
+            // Because we have a negative scale on Y, we likely need to invert sign:
+            offsetDistance = -offsetDistance;
           }
-          let p1_dim = { x: p1.x + v.x * offsetDistance, y: p1.y + v.y * offsetDistance };
-          let p2_dim = { x: p2.x + v.x * offsetDistance, y: p2.y + v.y * offsetDistance };
+
+          // Points offset in direction v
+          let p1_dim = { 
+            x: p1.x + v.x * offsetDistance, 
+            y: p1.y + v.y * offsetDistance 
+          };
+          let p2_dim = { 
+            x: p2.x + v.x * offsetDistance, 
+            y: p2.y + v.y * offsetDistance 
+          };
+
+          // Draw extension lines and dimension line
           ctx.beginPath();
           ctx.moveTo(p1.x, p1.y);
           ctx.lineTo(p1_dim.x, p1_dim.y);
@@ -1171,13 +1194,25 @@
           ctx.moveTo(p1_dim.x, p1_dim.y);
           ctx.lineTo(p2_dim.x, p2_dim.y);
           ctx.stroke();
+
+          // Arrows:
           function drawArrow(pt, direction) {
             const arrowSize = 3;
             const arrowAngle = Math.PI / 6;
-            let leftAngle = Math.atan2(direction.y, direction.x) + arrowAngle;
-            let rightAngle = Math.atan2(direction.y, direction.x) - arrowAngle;
-            let left = { x: pt.x - arrowSize * Math.cos(leftAngle), y: pt.y - arrowSize * Math.sin(leftAngle) };
-            let right = { x: pt.x - arrowSize * Math.cos(rightAngle), y: pt.y - arrowSize * Math.sin(rightAngle) };
+            let baseAngle = Math.atan2(direction.y, direction.x);
+
+            let leftAngle = baseAngle + arrowAngle;
+            let rightAngle = baseAngle - arrowAngle;
+
+            let left = {
+              x: pt.x - arrowSize * Math.cos(leftAngle),
+              y: pt.y - arrowSize * Math.sin(leftAngle)
+            };
+            let right = {
+              x: pt.x - arrowSize * Math.cos(rightAngle),
+              y: pt.y - arrowSize * Math.sin(rightAngle)
+            };
+
             ctx.beginPath();
             ctx.moveTo(pt.x, pt.y);
             ctx.lineTo(left.x, left.y);
@@ -1185,20 +1220,34 @@
             ctx.closePath();
             ctx.fill();
           }
+
           let arrowDir = { x: p2_dim.x - p1_dim.x, y: p2_dim.y - p1_dim.y };
           let arrowLen = Math.sqrt(arrowDir.x * arrowDir.x + arrowDir.y * arrowDir.y);
           if (arrowLen > 1e-9) {
-            arrowDir.x /= arrowLen; arrowDir.y /= arrowLen;
+            arrowDir.x /= arrowLen;
+            arrowDir.y /= arrowLen;
             drawArrow(p1_dim, arrowDir);
             drawArrow(p2_dim, { x: -arrowDir.x, y: -arrowDir.y });
           }
+
+          // Dimension text
           let dimText = this.text.trim();
           if (!dimText || dimText === "<>") {
             dimText = baselineLength.toFixed(2);
           }
-          let dimLineMid = { x: (p1_dim.x + p2_dim.x) / 2, y: (p1_dim.y + p2_dim.y) / 2 };
+          let dimLineMid = { 
+            x: (p1_dim.x + p2_dim.x) / 2, 
+            y: (p1_dim.y + p2_dim.y) / 2 
+          };
+
+          // Adjust text angle to your flipped Y system:
           let angle = Math.atan2(u.y, u.x);
-          if (angle > Math.PI / 2 || angle < -Math.PI / 2) angle += Math.PI;
+          // Possibly invert it:
+          angle = -angle;
+          // Or if you want the text upright always:
+          if (angle > Math.PI / 2) angle -= Math.PI;
+          if (angle < -Math.PI / 2) angle += Math.PI;
+
           ctx.save();
           ctx.translate(dimLineMid.x, dimLineMid.y);
           ctx.rotate(angle);
@@ -1207,6 +1256,7 @@
           ctx.textBaseline = "middle";
           ctx.fillText(dimText, 0, 0);
           ctx.restore();
+
           ctx.globalAlpha = 1;
         }
       }
@@ -1235,8 +1285,12 @@
               case "40": mtext.height = parseFloat(value); break;
               case "50": mtext.rotation = parseFloat(value); break;
               case "1":
+                // First chunk of text replaces previous text.
+                mtext.rawText = value;
+                break;
               case "3":
-                mtext.rawText += value;
+                // Continuation lines: add a newline before appending.
+                mtext.rawText += "\n" + value;
                 break;
               case "7": mtext.font = value; break;
               case "41": mtext.maxWidth = parseFloat(value); break;
@@ -1299,9 +1353,8 @@
           ctx.translate(x, y);
           // Apply an extra vertical scale to cancel the global flip:
           ctx.scale(1, -1);
-          // Note: since we now undone the flip, we use a positive rotation.
+          // Use positive rotation since the flip is undone
           ctx.rotate(rotation);
-          // Also, invert the offsetY so that alignment is correct.
           ctx.translate(0, -offsetY);
           for (let i = 0; i < wrappedLines.length; i++) {
             let line = wrappedLines[i];
@@ -1518,7 +1571,6 @@
                 insert.rotation = parseFloat(value);
                 break;
               case "67":
-                // Read the paper/model space flag so that shouldRender works correctly.
                 insert.raw["67"] = value;
                 break;
               default:
@@ -1527,7 +1579,6 @@
             }
             i += 2;
           }
-          // If only one scale factor is provided (non-default in x, default in y), then use uniform scaling.
           if (insert.scale.x !== 1 && insert.scale.y === 1) {
             insert.scale.y = insert.scale.x;
           }
@@ -1543,7 +1594,6 @@
           let { x: scaleX, y: scaleY } = this.scale;
           let angle = DXFUtils.degToRad(this.rotation);
           let bp = block.basePoint || { x: 0, y: 0 };
-          // Apply the transformation: T(insertion) * R(rotation) * S(scale) * T(-basePoint)
           ctx.translate(insX, insY);
           ctx.rotate(angle);
           ctx.scale(scaleX, scaleY);
@@ -1647,11 +1697,8 @@
           else if (vAlign === 2) offsetY = -totalHeight;
           ctx.save();
           ctx.translate(x, y);
-          // Apply an extra vertical scale to cancel the global flip:
           ctx.scale(1, -1);
-          // Note: since we now undone the flip, we use a positive rotation.
           ctx.rotate(rotation);
-          // Also, invert the offsetY so that alignment is correct.
           ctx.translate(0, -offsetY);
           for (let i = 0; i < wrappedLines.length; i++) {
             let line = wrappedLines[i];
@@ -2329,7 +2376,6 @@
           this.ongoingTouches = [];
           this.lastTouchDistance = null;
           this.lastTouchCenter = null;
-          // New: activeLayout is either "model" or "paper"
           this.activeLayout = "model";
           this.registerEventHandlers();
           window.addEventListener("resize", () => this.onResize());
@@ -2365,18 +2411,14 @@
           this.viewport.setInitialView(this.dxfDoc);
           this.draw();
         }
-        // Updated helper: filter entities by layout flag (group code "67")
         shouldRender(entity) {
-          // Force VIEWPORT entities to render only in paper space
           if (entity.type === "VIEWPORT") {
             return this.activeLayout === "paper";
           }
           const flag = entity.raw["67"];
           if (this.activeLayout === "model") {
-            // Model space: render if flag is undefined or equals 0
             return (!flag || parseInt(flag, 10) === 0);
           } else if (this.activeLayout === "paper") {
-            // Paper space: render only if flag exists and equals 1
             return (flag !== undefined && parseInt(flag, 10) === 1);
           }
           return true;
@@ -2397,7 +2439,6 @@
           if (this.gridEnabled) {
             this.drawGrid();
           }
-          // Only draw entities that pass the layout filter
           this.dxfDoc.entities.forEach(entity => {
             if (this.shouldRender(entity) && renderSettings.entity[entity.type] !== false) {
               entity.draw(ctx, this.viewport, this.dxfDoc);
@@ -2516,9 +2557,8 @@
       const canvas = document.getElementById("canvas");
       const viewer = new DXFViewer(canvas);
 
-      // Listen for layout selection changes
       document.getElementById("layoutSelect").addEventListener("change", function(e) {
-        viewer.activeLayout = e.target.value; // "model" or "paper"
+        viewer.activeLayout = e.target.value;
         viewer.draw();
       });
 
