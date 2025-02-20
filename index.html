@@ -868,6 +868,7 @@
           super("LWPOLYLINE");
           this.vertices = [];
           this.closed = false;
+          this.elevation = 0; // optional elevation for all vertices
         }
         static parse(lines, i) {
           let lwpoly = new DXFLwPolyline();
@@ -878,26 +879,40 @@
             let value = (lines[i + 1] || "").trim();
             switch (code) {
               case "70":
+                // Bit 1 (value 1) indicates a closed polyline.
                 lwpoly.closed = (parseInt(value, 10) & 1) !== 0;
                 break;
+              case "38":
+                // Optional elevation (all vertices lie in a plane with this elevation)
+                lwpoly.elevation = parseFloat(value);
+                break;
               case "10": {
+                // Parse a vertex
                 let x = parseFloat(value);
-                let y = 0;
-                let oldI = i;
                 i += 2;
+                let y = 0;
                 if (i < lines.length && lines[i].trim() === "20") {
                   y = parseFloat((lines[i + 1] || "").trim());
                   i += 2;
-                } else {
-                  i = oldI + 2;
                 }
+                // Optional: constant width at this vertex (start width, group 40; end width, group 41)
+                let widthStart = null, widthEnd = null;
+                if (i < lines.length && lines[i].trim() === "40") {
+                  widthStart = parseFloat((lines[i + 1] || "").trim());
+                  i += 2;
+                }
+                if (i < lines.length && lines[i].trim() === "41") {
+                  widthEnd = parseFloat((lines[i + 1] || "").trim());
+                  i += 2;
+                }
+                // Group code 42 is for bulge (arc definition)
                 let bulge = 0;
                 if (i < lines.length && lines[i].trim() === "42") {
                   bulge = parseFloat((lines[i + 1] || "").trim());
                   i += 2;
                 }
-                lwpoly.vertices.push({ x, y, bulge });
-                continue;
+                lwpoly.vertices.push({ x, y, bulge, widthStart, widthEnd });
+                continue; // already advanced i inside the block
               }
               default:
                 lwpoly.raw[code] = value;
@@ -912,24 +927,52 @@
           if (this.vertices.length === 0) return;
           this.applyStyle(ctx, viewport, dxfDoc);
           ctx.beginPath();
-          for (let j = 0; j < this.vertices.length; j++) {
+          const n = this.vertices.length;
+          // Determine the iteration count: for closed polylines, loop over all vertices;
+          // for open ones, draw from vertex 0 to vertex n-1.
+          const count = this.closed ? n : n - 1;
+          // Move to first vertex
+          ctx.moveTo(this.vertices[0].x, this.vertices[0].y);
+          for (let j = 0; j < count; j++) {
             let curr = this.vertices[j];
-            let next = this.vertices[(j + 1) % this.vertices.length];
-            if (j === 0) ctx.moveTo(curr.x, curr.y);
-            if (!this.closed && j === this.vertices.length - 1) break;
-            let bulge = curr.bulge || 0;
-            if (Math.abs(bulge) > 1e-9) {
+            // For closed polylines use modulo; for open, next vertex is j+1
+            let next = this.vertices[this.closed ? (j + 1) % n : j + 1];
+            if (Math.abs(curr.bulge) > 1e-9) {
+              // Bulge is defined as tan(angle/4); so the sweep angle is:
+              let a = 4 * Math.atan(curr.bulge); // (a is signed)
+              // Compute the chord length between the current and next vertices:
               let chord = getDistance(curr, next);
-              let theta = 4 * Math.atan(Math.abs(bulge));
-              let midpoint = getCenter(curr, next);
-              let dx = (next.x - curr.x), dy = (next.y - curr.y);
-              let chordAngle = Math.atan2(dy, dx);
-              let radius = chord / (2 * Math.sin(theta / 2));
-              let ccw = bulge > 0;
-              let startAngle = Math.atan2(curr.y - midpoint.y, curr.x - midpoint.x);
-              let endAngle = Math.atan2(next.y - midpoint.y, next.x - midpoint.x);
-              ctx.arc(midpoint.x, midpoint.y, radius, startAngle, endAngle, !ccw);
+              // Avoid division by zero for extremely small arcs
+              if (Math.abs(Math.sin(Math.abs(a) / 2)) < 1e-9) {
+                ctx.lineTo(next.x, next.y);
+                continue;
+              }
+              // Radius of the arc: r = chord / (2*sin(|a|/2))
+              let r = chord / (2 * Math.sin(Math.abs(a) / 2));
+              // Distance from chord midpoint to arc center:
+              let h = r * Math.cos(Math.abs(a) / 2);
+              // Chord midpoint:
+              let mx = (curr.x + next.x) / 2;
+              let my = (curr.y + next.y) / 2;
+              // Chord direction unit vector:
+              let dx = next.x - curr.x, dy = next.y - curr.y;
+              let len = Math.sqrt(dx * dx + dy * dy);
+              let ux = dx / len, uy = dy / len;
+              // Determine the perpendicular vector.
+              // For a positive bulge, the arc is drawn to the left of the chord (relative to its direction).
+              let perp = curr.bulge > 0 ? { x: -uy, y: ux } : { x: uy, y: -ux };
+              // Compute the arc center:
+              let cx = mx + perp.x * h;
+              let cy = my + perp.y * h;
+              // Start angle: angle from center to current vertex.
+              let startAngle = Math.atan2(curr.y - cy, curr.x - cx);
+              // End angle: add the sweep angle a.
+              let endAngle = startAngle + a;
+              // In canvas arc, the anticlockwise flag is set to true when a is negative.
+              let anticlockwise = a < 0;
+              ctx.arc(cx, cy, r, startAngle, endAngle, anticlockwise);
             } else {
+              // Straight segment
               ctx.lineTo(next.x, next.y);
             }
           }
