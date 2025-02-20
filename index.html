@@ -1297,8 +1297,12 @@
           else if (vAlign === 2) offsetY = -totalHeight;
           ctx.save();
           ctx.translate(x, y);
-          ctx.rotate(-rotation);
-          ctx.translate(0, offsetY);
+          // Apply an extra vertical scale to cancel the global flip:
+          ctx.scale(1, -1);
+          // Note: since we now undone the flip, we use a positive rotation.
+          ctx.rotate(rotation);
+          // Also, invert the offsetY so that alignment is correct.
+          ctx.translate(0, -offsetY);
           for (let i = 0; i < wrappedLines.length; i++) {
             let line = wrappedLines[i];
             let lw = lineWidths[i];
@@ -1622,8 +1626,12 @@
           else if (vAlign === 2) offsetY = -totalHeight;
           ctx.save();
           ctx.translate(x, y);
-          ctx.rotate(-rotation);
-          ctx.translate(0, offsetY);
+          // Apply an extra vertical scale to cancel the global flip:
+          ctx.scale(1, -1);
+          // Note: since we now undone the flip, we use a positive rotation.
+          ctx.rotate(rotation);
+          // Also, invert the offsetY so that alignment is correct.
+          ctx.translate(0, -offsetY);
           for (let i = 0; i < wrappedLines.length; i++) {
             let line = wrappedLines[i];
             let lw = lineWidths[i];
