@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Improved Web DXF Viewer – Enhanced MTEXT & HATCH Rendering</title>
+    <title>Improved Web DXF Viewer – Enhanced MTEXT, HATCH & VIEWPORT Rendering</title>
     <style>
       /* Fullscreen canvas and toolbar styling */
       body {
@@ -123,6 +123,9 @@
         <label>
           <input type="checkbox" class="entity-toggle" data-type="SOLID" checked /> SOLID
         </label><br />
+        <label>
+          <input type="checkbox" class="entity-toggle" data-type="VIEWPORT" checked /> VIEWPORT
+        </label><br />
       </div>
     </div>
 
@@ -169,7 +172,8 @@
           ATTRIB: true,
           ELLIPSE: true,
           "3DFACE": true,
-          SOLID: true
+          SOLID: true,
+          VIEWPORT: true // Added support for VIEWPORT
         },
         renderLinetype: true,
         renderColor: true,
@@ -254,191 +258,189 @@
         let result = parseFormattedText(rawText, 0, defaultStyle);
         return result.segments;
       }
-function parseFormattedText(text, pos, currentStyle) {
-  let segments = [];
-  let currentSegment = { text: "", style: Object.assign({}, currentStyle) };
-  while (pos < text.length) {
-    let ch = text[pos];
-    if (ch === '{') {
-      if (currentSegment.text) {
-        segments.push(currentSegment);
-        currentSegment = { text: "", style: Object.assign({}, currentStyle) };
-      }
-      let groupResult = parseGroup(text, pos + 1, Object.assign({}, currentStyle));
-      segments.push(...groupResult.segments);
-      pos = groupResult.pos;
-    } else if (ch === '}') {
-      if (currentSegment.text) segments.push(currentSegment);
-      return { segments: segments, pos: pos + 1 };
-    }
-    // ── Handle caret codes per documentation ──
-    else if (ch === '^') {
-      pos++;
-      if (pos < text.length) {
-        let nextChar = text[pos];
-        if (nextChar === 'I') {
-          currentSegment.text += '\t';
-        } else if (nextChar === 'J') {
-          if (currentSegment.text) segments.push(currentSegment);
-          segments.push({ paragraphBreak: true });
-          currentSegment = { text: "", style: Object.assign({}, currentStyle) };
-        } else if (nextChar === 'M') {
-          // ^M is ignored
-        } else {
-          // Any other character: render a replacement square plus the char.
-          currentSegment.text += '▯' + nextChar;
+      function parseFormattedText(text, pos, currentStyle) {
+        let segments = [];
+        let currentSegment = { text: "", style: Object.assign({}, currentStyle) };
+        while (pos < text.length) {
+          let ch = text[pos];
+          if (ch === '{') {
+            if (currentSegment.text) {
+              segments.push(currentSegment);
+              currentSegment = { text: "", style: Object.assign({}, currentStyle) };
+            }
+            let groupResult = parseGroup(text, pos + 1, Object.assign({}, currentStyle));
+            segments.push(...groupResult.segments);
+            pos = groupResult.pos;
+          } else if (ch === '}') {
+            if (currentSegment.text) segments.push(currentSegment);
+            return { segments: segments, pos: pos + 1 };
+          }
+          // ── Handle caret codes per documentation ──
+          else if (ch === '^') {
+            pos++;
+            if (pos < text.length) {
+              let nextChar = text[pos];
+              if (nextChar === 'I') {
+                currentSegment.text += '\t';
+              } else if (nextChar === 'J') {
+                if (currentSegment.text) segments.push(currentSegment);
+                segments.push({ paragraphBreak: true });
+                currentSegment = { text: "", style: Object.assign({}, currentStyle) };
+              } else if (nextChar === 'M') {
+                // ^M is ignored
+              } else {
+                currentSegment.text += '▯' + nextChar;
+              }
+              pos++;
+            }
+          }
+          // ── Handle backslash escape and inline commands ──
+          else if (ch === '\\') {
+            if (text.substr(pos, 2) === '\\P') {
+              if (currentSegment.text) segments.push(currentSegment);
+              segments.push({ paragraphBreak: true });
+              pos += 2;
+              currentSegment = { text: "", style: Object.assign({}, currentStyle) };
+              continue;
+            } else if (text.substr(pos, 2) === '\\L') {
+              currentStyle.underline = true;
+              pos += 2;
+              continue;
+            } else if (text.substr(pos, 2) === '\\l') {
+              currentStyle.underline = false;
+              pos += 2;
+              continue;
+            } else if (text.substr(pos, 2) === '\\O') {
+              currentStyle.overline = true;
+              pos += 2;
+              continue;
+            } else if (text.substr(pos, 2) === '\\o') {
+              currentStyle.overline = false;
+              pos += 2;
+              continue;
+            } else if (text.substr(pos, 2) === '\\B') {
+              currentStyle.bold = true;
+              pos += 2;
+              continue;
+            } else if (text.substr(pos, 2) === '\\b') {
+              currentStyle.bold = false;
+              pos += 2;
+              continue;
+            } else if (text.substr(pos, 2) === '\\I') {
+              currentStyle.italic = true;
+              pos += 2;
+              continue;
+            } else if (text.substr(pos, 2) === '\\i') {
+              currentStyle.italic = false;
+              pos += 2;
+              continue;
+            } else if (text.substr(pos, 2) === '\\C') {
+              pos += 2;
+              let colorCode = "";
+              while (pos < text.length && text[pos] !== ';') {
+                colorCode += text[pos];
+                pos++;
+              }
+              if (text[pos] === ';') pos++;
+              currentStyle.color = DXFStyle.getACIColor(parseInt(colorCode, 10));
+              continue;
+            } else if (text.substr(pos, 2) === '\\S') {
+              pos += 2;
+              let stackedStr = "";
+              while (pos < text.length && text[pos] !== ';') {
+                stackedStr += text[pos];
+                pos++;
+              }
+              if (text[pos] === ';') pos++;
+              let parts = stackedStr.split('^');
+              let topText = parts[0] || "";
+              let bottomText = parts[1] || "";
+              if (currentSegment.text) {
+                segments.push(currentSegment);
+                currentSegment = { text: "", style: Object.assign({}, currentStyle) };
+              }
+              segments.push({
+                stacked: { top: topText, bottom: bottomText },
+                style: Object.assign({}, currentStyle)
+              });
+              continue;
+            } else if (text.substr(pos, 2) === '\\{') {
+              currentSegment.text += '{';
+              pos += 2;
+              continue;
+            } else if (text.substr(pos, 2) === '\\}') {
+              currentSegment.text += '}';
+              pos += 2;
+              continue;
+            } else if (text.substr(pos, 2) === '\\~') {
+              currentSegment.text += "\u00A0";
+              pos += 2;
+              continue;
+            }
+            // ── New inline commands based on the MTEXT docs ──
+            else if (text.substr(pos, 2) === '\\A') {
+              pos += 2;
+              let arg = "";
+              while (pos < text.length && /[0-9\-]/.test(text[pos])) {
+                arg += text[pos];
+                pos++;
+              }
+              if (text[pos] === ';') pos++;
+              currentStyle.inlineAlignment = parseInt(arg, 10) || 0;
+              continue;
+            } else if (text.substr(pos, 2) === '\\W') {
+              pos += 2;
+              let arg = "";
+              while (pos < text.length && /[0-9eE\.\+\-]/.test(text[pos])) {
+                arg += text[pos];
+                pos++;
+              }
+              if (text[pos] === 'x') pos++;
+              if (text[pos] === ';') pos++;
+              currentStyle.widthScale = parseFloat(arg) || 1;
+              continue;
+            } else if (text.substr(pos, 2) === '\\T') {
+              pos += 2;
+              let arg = "";
+              while (pos < text.length && /[0-9eE\.\+\-]/.test(text[pos])) {
+                arg += text[pos];
+                pos++;
+              }
+              if (text[pos] === ';') pos++;
+              currentStyle.tracking = parseFloat(arg) || 0;
+              continue;
+            } else if (text.substr(pos, 2) === '\\Q') {
+              pos += 2;
+              let arg = "";
+              while (pos < text.length && /[0-9eE\.\+\-]/.test(text[pos])) {
+                arg += text[pos];
+                pos++;
+              }
+              if (text[pos] === ';') pos++;
+              currentStyle.oblique = parseFloat(arg) || 0;
+              continue;
+            } else if (text.substr(pos, 2) === '\\F') {
+              pos += 2;
+              let fontName = "";
+              while (pos < text.length && text[pos] !== ';') {
+                fontName += text[pos];
+                pos++;
+              }
+              if (text[pos] === ';') pos++;
+              currentStyle.font = fontName;
+              continue;
+            } else {
+              currentSegment.text += ch;
+              pos++;
+            }
+          } else {
+            currentSegment.text += ch;
+            pos++;
+          }
         }
-        pos++;
-      }
-    }
-    // ── Handle backslash escape and inline commands ──
-    else if (ch === '\\') {
-      if (text.substr(pos, 2) === '\\P') {
         if (currentSegment.text) segments.push(currentSegment);
-        segments.push({ paragraphBreak: true });
-        pos += 2;
-        currentSegment = { text: "", style: Object.assign({}, currentStyle) };
-        continue;
-      } else if (text.substr(pos, 2) === '\\L') {
-        currentStyle.underline = true;
-        pos += 2;
-        continue;
-      } else if (text.substr(pos, 2) === '\\l') {
-        currentStyle.underline = false;
-        pos += 2;
-        continue;
-      } else if (text.substr(pos, 2) === '\\O') {
-        currentStyle.overline = true;
-        pos += 2;
-        continue;
-      } else if (text.substr(pos, 2) === '\\o') {
-        currentStyle.overline = false;
-        pos += 2;
-        continue;
-      } else if (text.substr(pos, 2) === '\\B') {
-        currentStyle.bold = true;
-        pos += 2;
-        continue;
-      } else if (text.substr(pos, 2) === '\\b') {
-        currentStyle.bold = false;
-        pos += 2;
-        continue;
-      } else if (text.substr(pos, 2) === '\\I') {
-        currentStyle.italic = true;
-        pos += 2;
-        continue;
-      } else if (text.substr(pos, 2) === '\\i') {
-        currentStyle.italic = false;
-        pos += 2;
-        continue;
-      } else if (text.substr(pos, 2) === '\\C') {
-        pos += 2;
-        let colorCode = "";
-        while (pos < text.length && text[pos] !== ';') {
-          colorCode += text[pos];
-          pos++;
-        }
-        if (text[pos] === ';') pos++;
-        currentStyle.color = DXFStyle.getACIColor(parseInt(colorCode, 10));
-        continue;
-      } else if (text.substr(pos, 2) === '\\S') {
-        pos += 2;
-        let stackedStr = "";
-        while (pos < text.length && text[pos] !== ';') {
-          stackedStr += text[pos];
-          pos++;
-        }
-        if (text[pos] === ';') pos++;
-        let parts = stackedStr.split('^');
-        let topText = parts[0] || "";
-        let bottomText = parts[1] || "";
-        if (currentSegment.text) {
-          segments.push(currentSegment);
-          currentSegment = { text: "", style: Object.assign({}, currentStyle) };
-        }
-        segments.push({
-          stacked: { top: topText, bottom: bottomText },
-          style: Object.assign({}, currentStyle)
-        });
-        continue;
-      } else if (text.substr(pos, 2) === '\\{') {
-        currentSegment.text += '{';
-        pos += 2;
-        continue;
-      } else if (text.substr(pos, 2) === '\\}') {
-        currentSegment.text += '}';
-        pos += 2;
-        continue;
-      } else if (text.substr(pos, 2) === '\\~') {
-        currentSegment.text += "\u00A0";
-        pos += 2;
-        continue;
+        return { segments: segments, pos: pos };
       }
-      // ── New inline commands based on the MTEXT docs ──
-      else if (text.substr(pos, 2) === '\\A') {
-        pos += 2;
-        let arg = "";
-        while (pos < text.length && /[0-9\-]/.test(text[pos])) {
-          arg += text[pos];
-          pos++;
-        }
-        if (text[pos] === ';') pos++;
-        // Save the inline alignment (0, 1 or 2) in the style.
-        currentStyle.inlineAlignment = parseInt(arg, 10) || 0;
-        continue;
-      } else if (text.substr(pos, 2) === '\\W') {
-        pos += 2;
-        let arg = "";
-        while (pos < text.length && /[0-9eE\.\+\-]/.test(text[pos])) {
-          arg += text[pos];
-          pos++;
-        }
-        if (text[pos] === 'x') pos++;
-        if (text[pos] === ';') pos++;
-        currentStyle.widthScale = parseFloat(arg) || 1;
-        continue;
-      } else if (text.substr(pos, 2) === '\\T') {
-        pos += 2;
-        let arg = "";
-        while (pos < text.length && /[0-9eE\.\+\-]/.test(text[pos])) {
-          arg += text[pos];
-          pos++;
-        }
-        if (text[pos] === ';') pos++;
-        currentStyle.tracking = parseFloat(arg) || 0;
-        continue;
-      } else if (text.substr(pos, 2) === '\\Q') {
-        pos += 2;
-        let arg = "";
-        while (pos < text.length && /[0-9eE\.\+\-]/.test(text[pos])) {
-          arg += text[pos];
-          pos++;
-        }
-        if (text[pos] === ';') pos++;
-        currentStyle.oblique = parseFloat(arg) || 0;
-        continue;
-      } else if (text.substr(pos, 2) === '\\F') {
-        pos += 2;
-        let fontName = "";
-        while (pos < text.length && text[pos] !== ';') {
-          fontName += text[pos];
-          pos++;
-        }
-        if (text[pos] === ';') pos++;
-        currentStyle.font = fontName;
-        continue;
-      } else {
-        currentSegment.text += ch;
-        pos++;
-      }
-    } else {
-      currentSegment.text += ch;
-      pos++;
-    }
-  }
-  if (currentSegment.text) segments.push(currentSegment);
-  return { segments: segments, pos: pos };
-}
       function parseGroup(text, pos, currentStyle) {
         if (text.substr(pos, 2) === '\\H') {
           pos += 2;
@@ -470,34 +472,31 @@ function parseFormattedText(text, pos, currentStyle) {
           return parseFormattedText(text, pos, currentStyle);
         }
       }
-function measureSegment(segment, defaultSize, viewport) {
-  let size = defaultSize * (segment.style.scale || 1) * viewport.viewScale;
-  let font = segment.style.font || "sans-serif";
-  let weight = segment.style.bold ? "bold " : "";
-  let italic = segment.style.italic ? "italic " : "";
-  // Create a cache key based on text and style parameters.
-  let key = segment.text + "|" + font + "|" + weight + "|" + italic + "|" + size;
-  if (!measureSegment.cache) {
-    measureSegment.cache = {};
-    measureSegment.ctx = document.createElement("canvas").getContext("2d");
-  }
-  if (measureSegment.cache[key] !== undefined) {
-    return measureSegment.cache[key];
-  }
-  let ctx = measureSegment.ctx;
-  ctx.font = italic + weight + size + "px " + font;
-  let measured = ctx.measureText(segment.text).width;
-  // Add tracking if applicable
-  if (segment.style.tracking) {
-    measured += segment.text.length > 0 ? segment.style.tracking * (segment.text.length - 1) : 0;
-  }
-  // Apply widthScale if not 1
-  if (segment.style.widthScale && segment.style.widthScale !== 1) {
-    measured *= segment.style.widthScale;
-  }
-  measureSegment.cache[key] = measured;
-  return measured;
-}
+      function measureSegment(segment, defaultSize, viewport) {
+        let size = defaultSize * (segment.style.scale || 1) * viewport.viewScale;
+        let font = segment.style.font || "sans-serif";
+        let weight = segment.style.bold ? "bold " : "";
+        let italic = segment.style.italic ? "italic " : "";
+        let key = segment.text + "|" + font + "|" + weight + "|" + italic + "|" + size;
+        if (!measureSegment.cache) {
+          measureSegment.cache = {};
+          measureSegment.ctx = document.createElement("canvas").getContext("2d");
+        }
+        if (measureSegment.cache[key] !== undefined) {
+          return measureSegment.cache[key];
+        }
+        let ctx = measureSegment.ctx;
+        ctx.font = italic + weight + size + "px " + font;
+        let measured = ctx.measureText(segment.text).width;
+        if (segment.style.tracking) {
+          measured += segment.text.length > 0 ? segment.style.tracking * (segment.text.length - 1) : 0;
+        }
+        if (segment.style.widthScale && segment.style.widthScale !== 1) {
+          measured *= segment.style.widthScale;
+        }
+        measureSegment.cache[key] = measured;
+        return measured;
+      }
       function wrapMTEXTSegments(segments, maxWidth, defaultSize, viewport) {
         let lines = [];
         let currentLine = [];
@@ -642,7 +641,7 @@ function measureSegment(segment, defaultSize, viewport) {
       }
 
       // ─────────────────────────────────────────────────────────────
-      // DXF Entity Classes (Most remain unchanged)
+      // DXF Entity Classes
       // ─────────────────────────────────────────────────────────────
 
       class DXFLine extends DXFEntity {
@@ -892,7 +891,6 @@ function measureSegment(segment, defaultSize, viewport) {
       // Updated HATCH with Improved DXF/AutoCAD Compliance
       // ─────────────────────────────────────────────────────────────
 
-      // Helper functions for sampling arcs and ellipses
       function sampleArc(center, radius, startAngle, endAngle, numSegments = 20) {
         let points = [];
         for (let i = 0; i <= numSegments; i++) {
@@ -919,42 +917,37 @@ function measureSegment(segment, defaultSize, viewport) {
           this.boundaryLoops = [];
           this.isSolid = false;
           this.patternName = "";
-          // Hatch pattern properties
-          this.patternAngle = 0; // degrees
+          this.patternAngle = 0;
           this.patternScale = 1;
           this.patternOffset = { x: 0, y: 0 };
         }
 
         static parse(lines, i) {
           let hatch = new DXFHatch();
-          i += 2; // skip "HATCH" marker
+          i += 2;
           let boundaryLoopCount = 0;
           while (i < lines.length) {
             let code = lines[i].trim();
             let value = (lines[i + 1] || "").trim();
             if (code === "0") break;
             if (code === "70") {
-              // Bit 0 set means solid fill
               hatch.isSolid = (parseInt(value, 10) & 1) !== 0;
             } else if (code === "2") {
               hatch.patternName = value.toUpperCase();
             } else if (code === "91") {
               boundaryLoopCount = parseInt(value, 10);
             } else if (code === "92") {
-              // Start a new boundary loop. The value tells how many edges are in this loop.
               let edgeCount = parseInt(value, 10);
               i += 2;
               let loopPoints = [];
               for (let j = 0; j < edgeCount; j++) {
-                // Check if the next group is 72 (edge type)
-                let edgeType = 1; // default to a straight line
+                let edgeType = 1;
                 if (lines[i] && lines[i].trim() === "72") {
                   edgeType = parseInt(lines[i + 1].trim(), 10);
                   i += 2;
                 }
                 let edgePoints = [];
                 if (edgeType === 1) {
-                  // Straight line edge: expect group codes 10,20 for start and 11,21 for end.
                   let start = {}, end = {};
                   while (i < lines.length) {
                     let c = lines[i].trim();
@@ -966,14 +959,10 @@ function measureSegment(segment, defaultSize, viewport) {
                     else break;
                     i += 2;
                   }
-                  if (
-                    start.x !== undefined && start.y !== undefined &&
-                    end.x !== undefined && end.y !== undefined
-                  ) {
+                  if (start.x !== undefined && start.y !== undefined && end.x !== undefined && end.y !== undefined) {
                     edgePoints = [start, end];
                   }
                 } else if (edgeType === 2) {
-                  // Circular arc edge: codes 10,20 center; 40 radius; 50 start angle; 51 end angle.
                   let center = {}, radius = 0, startAngle = 0, endAngle = 0;
                   while (i < lines.length) {
                     let c = lines[i].trim();
@@ -989,7 +978,6 @@ function measureSegment(segment, defaultSize, viewport) {
                   if (endAngle < startAngle) endAngle += 2 * Math.PI;
                   edgePoints = sampleArc(center, radius, startAngle, endAngle);
                 } else if (edgeType === 3) {
-                  // Elliptical arc edge: codes 10,20 center; 11,21 major axis vector; 40 ratio; 50 start param; 51 end param.
                   let center = {}, majorVec = {}, ratio = 1, startParam = 0, endParam = 0;
                   while (i < lines.length) {
                     let c = lines[i].trim();
@@ -1009,7 +997,6 @@ function measureSegment(segment, defaultSize, viewport) {
                   let rotation = Math.atan2(majorVec.y || 0, majorVec.x || 0);
                   edgePoints = sampleEllipse(center, majorLength, minorLength, rotation, startParam, endParam);
                 } else if (edgeType === 4) {
-                  // Spline edge (minimal approximation)
                   let splinePoints = [];
                   while (i < lines.length) {
                     let c = lines[i].trim();
@@ -1022,6 +1009,7 @@ function measureSegment(segment, defaultSize, viewport) {
                         i += 2;
                       } else {
                         pt.y = 0;
+                        i -= 2;
                       }
                       splinePoints.push(pt);
                     } else {
@@ -1030,14 +1018,12 @@ function measureSegment(segment, defaultSize, viewport) {
                   }
                   edgePoints = splinePoints;
                 } else {
-                  // Unsupported edge type; skip codes until a recognizable group is found.
                   while (i < lines.length) {
                     let c = lines[i].trim();
                     if (c === "0" || c === "92" || c === "93") break;
                     i += 2;
                   }
                 }
-                // If the new edge’s first point is identical to the last point in this loop, remove it.
                 if (loopPoints.length > 0 && edgePoints.length > 0) {
                   let last = loopPoints[loopPoints.length - 1];
                   let first = edgePoints[0];
@@ -1048,13 +1034,12 @@ function measureSegment(segment, defaultSize, viewport) {
                 loopPoints.push(...edgePoints);
               }
               hatch.boundaryLoops.push(loopPoints);
-              continue; // already advanced i inside the "92" branch
+              continue;
             } else {
               hatch.raw[code] = value;
             }
             i += 2;
           }
-          // Hatch pattern properties (if available)
           if (hatch.raw["52"]) {
             hatch.patternAngle = parseFloat(hatch.raw["52"]);
           }
@@ -1070,30 +1055,22 @@ function measureSegment(segment, defaultSize, viewport) {
           this.applyStyle(ctx, viewport, dxfDoc);
           let fillColor = this.getColor(dxfDoc);
           ctx.save();
-
-          // First, create the hatch boundary path
           this.drawLoopsPath(ctx);
-
           if (this.isSolid || (this.patternName && this.patternName.toUpperCase().includes("SOLID"))) {
-            // Solid hatch: simply fill (and optionally stroke) the boundary.
             ctx.fillStyle = fillColor;
             ctx.fill();
             ctx.strokeStyle = fillColor;
             ctx.lineWidth = 1 / viewport.viewScale;
             ctx.stroke();
           } else {
-            // Pattern hatch: clip to the hatch boundary then draw the pattern lines.
             ctx.clip();
             let bbox = computeBBox(this.boundaryLoops);
             let patternAngleRad = DXFUtils.degToRad(this.patternAngle);
-            // Determine the spacing (you may adjust the constant factor as needed)
             let spacing = (this.patternScale || 1) * 10;
             ctx.save();
-            // Use the lower‐left corner of the bounding box as the origin.
             let origin = { x: bbox.minX, y: bbox.minY };
             ctx.translate(origin.x, origin.y);
             ctx.rotate(patternAngleRad);
-            // Compute bounds in the “pattern space”
             let pts = [
               { x: bbox.minX - origin.x, y: bbox.minY - origin.y },
               { x: bbox.maxX - origin.x, y: bbox.minY - origin.y },
@@ -1104,11 +1081,9 @@ function measureSegment(segment, defaultSize, viewport) {
             let tMaxX = Math.max(...pts.map(p => p.x));
             let tMinY = Math.min(...pts.map(p => p.y));
             let tMaxY = Math.max(...pts.map(p => p.y));
-            // Extend the range a bit to ensure full coverage
             tMinY -= spacing;
             tMaxY += spacing;
             ctx.beginPath();
-            // Draw horizontal lines (in pattern space) at intervals of "spacing"
             for (let y = tMinY; y <= tMaxY; y += spacing) {
               ctx.moveTo(tMinX, y);
               ctx.lineTo(tMaxX, y);
@@ -1341,69 +1316,58 @@ function measureSegment(segment, defaultSize, viewport) {
             ctx.save();
             ctx.translate(offsetX, i * lineHeight);
             let xPos = 0;
-// Inside DXFMTEXT.draw, in the loop over each segment:
-line.forEach(seg => {
-  ctx.save();
-  let segSize = defaultSize * (seg.style.scale || 1) * viewport.viewScale;
-  let segFont = seg.style.font || defaultFont;
-  let segWeight = seg.style.bold ? "bold " : "";
-  let segItalic = seg.style.italic ? "italic " : "";
-  ctx.font = segItalic + segWeight + segSize + "px " + segFont;
-  ctx.fillStyle = seg.style.color || defaultColor;
-  ctx.textBaseline = "alphabetic";
-  
-  let tracking = seg.style.tracking || 0;
-  let widthScale = seg.style.widthScale || 1;
-  let oblique = seg.style.oblique || 0;
-  
-  // If an oblique angle is set, apply horizontal skew
-  if (oblique !== 0) {
-    let tanOblique = Math.tan(oblique * Math.PI / 180);
-    ctx.transform(1, 0, tanOblique, 1, 0, 0);
-  }
-  
-  // If no special per‑character adjustments are needed, render the entire segment at once.
-  let measuredWidth = measureSegment(seg, defaultSize, viewport);
-  if (tracking === 0 && widthScale === 1 && oblique === 0) {
-    ctx.fillText(seg.text, xPos, 0);
-    xPos += measuredWidth;
-  } else {
-    // Otherwise, fall back to per‑character rendering.
-    for (let j = 0; j < seg.text.length; j++) {
-      let ch = seg.text[j];
-      ctx.fillText(ch, xPos, 0);
-      let charWidth = ctx.measureText(ch).width;
-      xPos += (charWidth + tracking) * widthScale;
-    }
-  }
-  
-  // Draw underline using cached measurement rather than re‑measuring.
-  if (seg.style.underline) {
-    let metrics = ctx.measureText(seg.text);
-    let underlineY = (metrics.actualBoundingBoxDescent !== undefined)
-      ? metrics.actualBoundingBoxDescent + 2 : segSize * 0.3;
-    ctx.beginPath();
-    ctx.moveTo(xPos - measuredWidth, underlineY);
-    ctx.lineTo(xPos, underlineY);
-    ctx.lineWidth = Math.max(1, segSize / 15);
-    ctx.strokeStyle = ctx.fillStyle;
-    ctx.stroke();
-  }
-  // Similar for overline...
-  if (seg.style.overline) {
-    let metrics = ctx.measureText(seg.text);
-    let overlineY = -(metrics.actualBoundingBoxAscent !== undefined
-      ? metrics.actualBoundingBoxAscent : segSize * 0.3);
-    ctx.beginPath();
-    ctx.moveTo(xPos - measuredWidth, overlineY);
-    ctx.lineTo(xPos, overlineY);
-    ctx.lineWidth = Math.max(1, segSize / 15);
-    ctx.strokeStyle = ctx.fillStyle;
-    ctx.stroke();
-  }
-  ctx.restore();
-});
-
+            line.forEach(seg => {
+              ctx.save();
+              let segSize = defaultSize * (seg.style.scale || 1) * viewport.viewScale;
+              let segFont = seg.style.font || defaultFont;
+              let segWeight = seg.style.bold ? "bold " : "";
+              let segItalic = seg.style.italic ? "italic " : "";
+              ctx.font = segItalic + segWeight + segSize + "px " + segFont;
+              ctx.fillStyle = seg.style.color || defaultColor;
+              ctx.textBaseline = "alphabetic";
+              let tracking = seg.style.tracking || 0;
+              let widthScale = seg.style.widthScale || 1;
+              let oblique = seg.style.oblique || 0;
+              if (oblique !== 0) {
+                let tanOblique = Math.tan(oblique * Math.PI / 180);
+                ctx.transform(1, 0, tanOblique, 1, 0, 0);
+              }
+              let measuredWidth = measureSegment(seg, defaultSize, viewport);
+              if (tracking === 0 && widthScale === 1 && oblique === 0) {
+                ctx.fillText(seg.text, xPos, 0);
+                xPos += measuredWidth;
+              } else {
+                for (let j = 0; j < seg.text.length; j++) {
+                  let ch = seg.text[j];
+                  ctx.fillText(ch, xPos, 0);
+                  let charWidth = ctx.measureText(ch).width;
+                  xPos += (charWidth + tracking) * widthScale;
+                }
+              }
+              if (seg.style.underline) {
+                let metrics = ctx.measureText(seg.text);
+                let underlineY = (metrics.actualBoundingBoxDescent !== undefined)
+                  ? metrics.actualBoundingBoxDescent + 2 : segSize * 0.3;
+                ctx.beginPath();
+                ctx.moveTo(xPos - measuredWidth, underlineY);
+                ctx.lineTo(xPos, underlineY);
+                ctx.lineWidth = Math.max(1, segSize / 15);
+                ctx.strokeStyle = ctx.fillStyle;
+                ctx.stroke();
+              }
+              if (seg.style.overline) {
+                let metrics = ctx.measureText(seg.text);
+                let overlineY = -(metrics.actualBoundingBoxAscent !== undefined
+                  ? metrics.actualBoundingBoxAscent : segSize * 0.3);
+                ctx.beginPath();
+                ctx.moveTo(xPos - measuredWidth, overlineY);
+                ctx.lineTo(xPos, overlineY);
+                ctx.lineWidth = Math.max(1, segSize / 15);
+                ctx.strokeStyle = ctx.fillStyle;
+                ctx.stroke();
+              }
+              ctx.restore();
+            });
             ctx.restore();
           }
           ctx.restore();
@@ -1781,6 +1745,69 @@ line.forEach(seg => {
         }
       }
 
+      // ─────────────────────────────────────────────────────────────
+      // NEW: DXFViewport entity class for handling viewports
+      // ─────────────────────────────────────────────────────────────
+      class DXFViewport extends DXFEntity {
+        constructor() {
+          super("VIEWPORT");
+          this.lowerLeft = { x: 0, y: 0 };
+          this.upperRight = { x: 0, y: 0 };
+          this.center = { x: 0, y: 0 };
+          this.viewCenter = { x: 0, y: 0 };
+          this.viewTarget = { x: 0, y: 0 };
+          this.lensLength = 50;
+          this.viewHeight = 1;
+        }
+        static parse(lines, i) {
+          let vp = new DXFViewport();
+          i += 2;
+          while (i < lines.length) {
+            let code = lines[i].trim();
+            if (code === "0") break;
+            let value = (lines[i + 1] || "").trim();
+            switch (code) {
+              case "10": vp.lowerLeft.x = parseFloat(value); break;
+              case "20": vp.lowerLeft.y = parseFloat(value); break;
+              case "11": vp.upperRight.x = parseFloat(value); break;
+              case "21": vp.upperRight.y = parseFloat(value); break;
+              case "12": vp.center.x = parseFloat(value); break;
+              case "22": vp.center.y = parseFloat(value); break;
+              case "13": vp.viewCenter.x = parseFloat(value); break;
+              case "23": vp.viewCenter.y = parseFloat(value); break;
+              case "14": vp.viewTarget.x = parseFloat(value); break;
+              case "24": vp.viewTarget.y = parseFloat(value); break;
+              case "40": vp.lensLength = parseFloat(value); break;
+              case "45": vp.viewHeight = parseFloat(value); break;
+              default: vp.raw[code] = value; break;
+            }
+            i += 2;
+          }
+          return { entity: vp, nextIndex: i };
+        }
+        draw(ctx, viewport, dxfDoc) {
+          if (!renderSettings.entity["VIEWPORT"]) return;
+          this.applyStyle(ctx, viewport, dxfDoc);
+          ctx.beginPath();
+          ctx.rect(
+            this.lowerLeft.x,
+            this.lowerLeft.y,
+            this.upperRight.x - this.lowerLeft.x,
+            this.upperRight.y - this.lowerLeft.y
+          );
+          ctx.stroke();
+          let centerX = (this.lowerLeft.x + this.upperRight.x) / 2;
+          let centerY = (this.lowerLeft.y + this.upperRight.y) / 2;
+          ctx.beginPath();
+          ctx.moveTo(centerX - 5, centerY);
+          ctx.lineTo(centerX + 5, centerY);
+          ctx.moveTo(centerX, centerY - 5);
+          ctx.lineTo(centerX, centerY + 5);
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+        }
+      }
+
       class GenericDXFEntity extends DXFEntity {
         static parse(lines, i) {
           let type = (lines[i + 1] || "").trim();
@@ -1970,7 +1997,7 @@ line.forEach(seg => {
                     i += 2;
                     break;
                   }
-                  if (["LINE", "CIRCLE", "ARC", "LWPOLYLINE", "POLYLINE", "TEXT", "MTEXT", "DIMENSION", "HATCH", "SPLINE", "INSERT", "ELLIPSE", "3DFACE", "SOLID", "ATTRIB"].includes(v)) {
+                  if (["LINE", "CIRCLE", "ARC", "LWPOLYLINE", "POLYLINE", "TEXT", "MTEXT", "DIMENSION", "HATCH", "SPLINE", "INSERT", "ELLIPSE", "3DFACE", "SOLID", "ATTRIB", "VIEWPORT"].includes(v)) {
                     let entRes = this.parseEntity(lines, i);
                     if (entRes) {
                       block.entities.push(entRes.entity);
@@ -2054,6 +2081,7 @@ line.forEach(seg => {
             case "ELLIPSE": return DXFEllipse.parse(lines, i);
             case "3DFACE": return DXF3DFace.parse(lines, i);
             case "SOLID": return DXFSolid.parse(lines, i);
+            case "VIEWPORT": return DXFViewport.parse(lines, i);
             default: return GenericDXFEntity.parse(lines, i);
           }
         }
