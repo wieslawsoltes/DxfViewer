@@ -173,7 +173,7 @@
           ELLIPSE: true,
           "3DFACE": true,
           SOLID: true,
-          VIEWPORT: true // Added support for VIEWPORT
+          VIEWPORT: true
         },
         renderLinetype: true,
         renderColor: true,
@@ -275,7 +275,6 @@
             if (currentSegment.text) segments.push(currentSegment);
             return { segments: segments, pos: pos + 1 };
           }
-          // ── Handle caret codes per documentation ──
           else if (ch === '^') {
             pos++;
             if (pos < text.length) {
@@ -287,14 +286,12 @@
                 segments.push({ paragraphBreak: true });
                 currentSegment = { text: "", style: Object.assign({}, currentStyle) };
               } else if (nextChar === 'M') {
-                // ^M is ignored
               } else {
                 currentSegment.text += '▯' + nextChar;
               }
               pos++;
             }
           }
-          // ── Handle backslash escape and inline commands ──
           else if (ch === '\\') {
             if (text.substr(pos, 2) === '\\P') {
               if (currentSegment.text) segments.push(currentSegment);
@@ -377,7 +374,6 @@
               pos += 2;
               continue;
             }
-            // ── New inline commands based on the MTEXT docs ──
             else if (text.substr(pos, 2) === '\\A') {
               pos += 2;
               let arg = "";
@@ -472,8 +468,14 @@
           return parseFormattedText(text, pos, currentStyle);
         }
       }
+
+      // ─────────────────────────────────────────────────────────────
+      // Text Measurement Helpers (for MTEXT)
+      // ─────────────────────────────────────────────────────────────
+
+      // Modified measureSegment: no extra multiplication by viewport.viewScale.
       function measureSegment(segment, defaultSize, viewport) {
-        let size = defaultSize * (segment.style.scale || 1) * viewport.viewScale;
+        let size = defaultSize * (segment.style.scale || 1);
         let font = segment.style.font || "sans-serif";
         let weight = segment.style.bold ? "bold " : "";
         let italic = segment.style.italic ? "italic " : "";
@@ -497,6 +499,8 @@
         measureSegment.cache[key] = measured;
         return measured;
       }
+
+      // Wrap MTEXT segments into lines (using world units for maxWidth)
       function wrapMTEXTSegments(segments, maxWidth, defaultSize, viewport) {
         let lines = [];
         let currentLine = [];
@@ -641,7 +645,7 @@
       }
 
       // ─────────────────────────────────────────────────────────────
-      // DXF Entity Classes
+      // DXF Entity Classes (LINE, CIRCLE, ARC, etc.)
       // ─────────────────────────────────────────────────────────────
 
       class DXFLine extends DXFEntity {
@@ -1216,6 +1220,9 @@
         }
       }
 
+      // ─────────────────────────────────────────────────────────────
+      // DXFMTEXT – MTEXT entity with world-space text rendering
+      // ─────────────────────────────────────────────────────────────
       class DXFMTEXT extends DXFEntity {
         constructor() {
           super("MTEXT");
@@ -1274,12 +1281,11 @@
             }
           });
           if (currentParagraph.length > 0) paragraphs.push(currentParagraph);
-          let maxWidth = this.maxWidth || 0;
+          let maxWidthWorld = this.maxWidth || 0;
           let wrappedLines = [];
-          let maxWidthScreen = maxWidth * viewport.viewScale;
-          if (maxWidth > 0) {
+          if (maxWidthWorld > 0) {
             paragraphs.forEach(para => {
-              let lines = wrapMTEXTSegments(para, maxWidthScreen, defaultSize, viewport);
+              let lines = wrapMTEXTSegments(para, maxWidthWorld, defaultSize, viewport);
               wrappedLines.push(...lines);
             });
           } else {
@@ -1289,7 +1295,7 @@
           let hAlign = align % 3; 
           if (hAlign === 0) hAlign = 3; 
           let vAlign = Math.floor((align - 1) / 3);
-          let lineHeight = defaultSize * viewport.viewScale * 1.2;
+          let lineHeight = defaultSize * 1.2;
           let totalHeight = wrappedLines.length * lineHeight;
           let lineWidths = [];
           let maxLineWidth = 0;
@@ -1302,9 +1308,8 @@
           if (vAlign === 1) offsetY = -totalHeight / 2;
           else if (vAlign === 2) offsetY = -totalHeight;
           ctx.save();
-          let screenPos = viewport.worldToScreen(x, y);
-          ctx.setTransform(1, 0, 0, 1, 0, 0);
-          ctx.translate(screenPos.x, screenPos.y);
+          // Do not reset the transform; use world coordinates directly.
+          ctx.translate(x, y);
           ctx.rotate(-rotation);
           ctx.translate(0, offsetY);
           for (let i = 0; i < wrappedLines.length; i++) {
@@ -1318,7 +1323,8 @@
             let xPos = 0;
             line.forEach(seg => {
               ctx.save();
-              let segSize = defaultSize * (seg.style.scale || 1) * viewport.viewScale;
+              // Use font size in world units (no extra scaling factor)
+              let segSize = defaultSize * (seg.style.scale || 1);
               let segFont = seg.style.font || defaultFont;
               let segWeight = seg.style.bold ? "bold " : "";
               let segItalic = seg.style.italic ? "italic " : "";
@@ -1587,16 +1593,116 @@
           let height = this.height;
           let rotation = this.rotation ? DXFUtils.degToRad(this.rotation) : 0;
           let text = this.text;
-          let screen = viewport.worldToScreen(x, y);
-          let screenFontSize = height * viewport.viewScale;
+          // Draw text in world space – no resetting of transform.
+          let defaultSize = this.height;
+          let defaultFont = this.font || "sans-serif";
+          let defaultColor = this.getColor(dxfDoc);
+          let rawText = this.text || "";
+          let parsedSegments = parseMTEXTContent(rawText, defaultSize, defaultFont, defaultColor);
+          let paragraphs = [], currentParagraph = [];
+          parsedSegments.forEach(seg => {
+            if (seg.paragraphBreak) {
+              paragraphs.push(currentParagraph);
+              currentParagraph = [];
+            } else {
+              currentParagraph.push(seg);
+            }
+          });
+          if (currentParagraph.length > 0) paragraphs.push(currentParagraph);
+          let maxWidthWorld = this.maxWidth || 0;
+          let wrappedLines = [];
+          if (maxWidthWorld > 0) {
+            paragraphs.forEach(para => {
+              let lines = wrapMTEXTSegments(para, maxWidthWorld, defaultSize, viewport);
+              wrappedLines.push(...lines);
+            });
+          } else {
+            wrappedLines = paragraphs;
+          }
+          let align = this.align || 1;
+          let hAlign = align % 3; 
+          if (hAlign === 0) hAlign = 3; 
+          let vAlign = Math.floor((align - 1) / 3);
+          let lineHeight = defaultSize * 1.2;
+          let totalHeight = wrappedLines.length * lineHeight;
+          let lineWidths = [];
+          let maxLineWidth = 0;
+          wrappedLines.forEach(line => {
+            let width = line.reduce((sum, seg) => sum + measureSegment(seg, defaultSize, viewport), 0);
+            lineWidths.push(width);
+            if (width > maxLineWidth) maxLineWidth = width;
+          });
+          let offsetY = 0;
+          if (vAlign === 1) offsetY = -totalHeight / 2;
+          else if (vAlign === 2) offsetY = -totalHeight;
           ctx.save();
-          ctx.setTransform(1, 0, 0, 1, 0, 0);
-          ctx.translate(screen.x, screen.y);
+          // Use world coordinates directly
+          ctx.translate(x, y);
           ctx.rotate(-rotation);
-          ctx.fillStyle = this.getColor(dxfDoc);
-          ctx.font = screenFontSize + "px " + this.font;
-          ctx.textBaseline = "alphabetic";
-          ctx.fillText(text, 0, 0);
+          ctx.translate(0, offsetY);
+          for (let i = 0; i < wrappedLines.length; i++) {
+            let line = wrappedLines[i];
+            let lw = lineWidths[i];
+            let offsetX = 0;
+            if (hAlign === 2) offsetX = (maxLineWidth - lw) / 2;
+            else if (hAlign === 3) offsetX = (maxLineWidth - lw);
+            ctx.save();
+            ctx.translate(offsetX, i * lineHeight);
+            let xPos = 0;
+            line.forEach(seg => {
+              ctx.save();
+              let segSize = defaultSize * (seg.style.scale || 1);
+              let segFont = seg.style.font || defaultFont;
+              let segWeight = seg.style.bold ? "bold " : "";
+              let segItalic = seg.style.italic ? "italic " : "";
+              ctx.font = segItalic + segWeight + segSize + "px " + segFont;
+              ctx.fillStyle = seg.style.color || defaultColor;
+              ctx.textBaseline = "alphabetic";
+              let tracking = seg.style.tracking || 0;
+              let widthScale = seg.style.widthScale || 1;
+              let oblique = seg.style.oblique || 0;
+              if (oblique !== 0) {
+                let tanOblique = Math.tan(oblique * Math.PI / 180);
+                ctx.transform(1, 0, tanOblique, 1, 0, 0);
+              }
+              let measuredWidth = measureSegment(seg, defaultSize, viewport);
+              if (tracking === 0 && widthScale === 1 && oblique === 0) {
+                ctx.fillText(seg.text, xPos, 0);
+                xPos += measuredWidth;
+              } else {
+                for (let j = 0; j < seg.text.length; j++) {
+                  let ch = seg.text[j];
+                  ctx.fillText(ch, xPos, 0);
+                  let charWidth = ctx.measureText(ch).width;
+                  xPos += (charWidth + tracking) * widthScale;
+                }
+              }
+              if (seg.style.underline) {
+                let metrics = ctx.measureText(seg.text);
+                let underlineY = (metrics.actualBoundingBoxDescent !== undefined)
+                  ? metrics.actualBoundingBoxDescent + 2 : segSize * 0.3;
+                ctx.beginPath();
+                ctx.moveTo(xPos - measuredWidth, underlineY);
+                ctx.lineTo(xPos, underlineY);
+                ctx.lineWidth = Math.max(1, segSize / 15);
+                ctx.strokeStyle = ctx.fillStyle;
+                ctx.stroke();
+              }
+              if (seg.style.overline) {
+                let metrics = ctx.measureText(seg.text);
+                let overlineY = -(metrics.actualBoundingBoxAscent !== undefined
+                  ? metrics.actualBoundingBoxAscent : segSize * 0.3);
+                ctx.beginPath();
+                ctx.moveTo(xPos - measuredWidth, overlineY);
+                ctx.lineTo(xPos, overlineY);
+                ctx.lineWidth = Math.max(1, segSize / 15);
+                ctx.strokeStyle = ctx.fillStyle;
+                ctx.stroke();
+              }
+              ctx.restore();
+            });
+            ctx.restore();
+          }
           ctx.restore();
           ctx.globalAlpha = 1;
         }
