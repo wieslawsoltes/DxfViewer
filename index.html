@@ -2823,6 +2823,7 @@
           let worldPos = viewer.viewport.screenToWorld(mouseX, mouseY);
           let hoveredEntity = null;
           for (let entity of viewer.dxfDoc.entities) {
+            if (!renderSettings.entity[entity.type]) continue;
             let bbox = getEntityBBox(entity);
             if (bbox &&
                 worldPos.x >= bbox.minX && worldPos.x <= bbox.maxX &&
