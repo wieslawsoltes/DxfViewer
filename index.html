@@ -1266,47 +1266,36 @@
           if (!renderSettings.entity["DIMENSION"]) return;
           this.applyStyle(ctx, viewport, dxfDoc);
 
-          // Retrieve dimension scale from header ($DIMSCALE) if available.
+          // Use $DIMSCALE only for text measurement; do not alter drawing points.
           let dimScale = (dxfDoc.header && dxfDoc.header["$DIMSCALE"])
             ? parseFloat(dxfDoc.header["$DIMSCALE"]) : 1;
 
           let p1 = this.p1, p2 = this.p2;
-          // Scale baseline length by dimension scale factor.
-          let dx = (p2.x - p1.x) * dimScale;
-          let dy = (p2.y - p1.y) * dimScale;
+          let dx = p2.x - p1.x;
+          let dy = p2.y - p1.y;
           let baselineLength = Math.sqrt(dx * dx + dy * dy);
           if (baselineLength < 1e-9) {
             ctx.globalAlpha = 1;
             return;
           }
 
-          // Unit vector along dimension line
+          // Unit vector along baseline and its perpendicular (pointing to the left)
           let u = { x: dx / baselineLength, y: dy / baselineLength };
-          // Perp vector
           let v = { x: -u.y, y: u.x };
 
           let mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
-          let offsetDistance = 5; // default offset in world coords
-
-          // If we have a definition point, measure offset from dimension line midpoint
+          // Default offset if no definition point is provided
+          let offsetDistance = 5;
           if (this.defPt) {
-            let mx = mid.x, my = mid.y;
-            offsetDistance = (this.defPt.x - mx) * v.x + (this.defPt.y - my) * v.y;
-            // Because we have a negative scale on Y, we likely need to invert sign:
-            offsetDistance = -offsetDistance;
+            // Project the difference (defPt - mid) onto v (no extra inversion)
+            offsetDistance = (this.defPt.x - mid.x) * v.x + (this.defPt.y - mid.y) * v.y;
           }
 
-          // Points offset in direction v
-          let p1_dim = { 
-            x: p1.x + v.x * offsetDistance, 
-            y: p1.y + v.y * offsetDistance 
-          };
-          let p2_dim = { 
-            x: p2.x + v.x * offsetDistance, 
-            y: p2.y + v.y * offsetDistance 
-          };
+          // Compute the offset (dimension) line endpoints
+          let p1_dim = { x: p1.x + v.x * offsetDistance, y: p1.y + v.y * offsetDistance };
+          let p2_dim = { x: p2.x + v.x * offsetDistance, y: p2.y + v.y * offsetDistance };
 
-          // Draw extension lines and dimension line
+          // Draw extension lines and the dimension line itself
           ctx.beginPath();
           ctx.moveTo(p1.x, p1.y);
           ctx.lineTo(p1_dim.x, p1_dim.y);
@@ -1316,24 +1305,19 @@
           ctx.lineTo(p2_dim.x, p2_dim.y);
           ctx.stroke();
 
-          // Arrows:
+          // Draw arrow heads at both ends
           function drawArrow(pt, direction) {
             const arrowSize = 3;
             const arrowAngle = Math.PI / 6;
             let baseAngle = Math.atan2(direction.y, direction.x);
-
-            let leftAngle = baseAngle + arrowAngle;
-            let rightAngle = baseAngle - arrowAngle;
-
             let left = {
-              x: pt.x - arrowSize * Math.cos(leftAngle),
-              y: pt.y - arrowSize * Math.sin(leftAngle)
+              x: pt.x - arrowSize * Math.cos(baseAngle + arrowAngle),
+              y: pt.y - arrowSize * Math.sin(baseAngle + arrowAngle)
             };
             let right = {
-              x: pt.x - arrowSize * Math.cos(rightAngle),
-              y: pt.y - arrowSize * Math.sin(rightAngle)
+              x: pt.x - arrowSize * Math.cos(baseAngle - arrowAngle),
+              y: pt.y - arrowSize * Math.sin(baseAngle - arrowAngle)
             };
-
             ctx.beginPath();
             ctx.moveTo(pt.x, pt.y);
             ctx.lineTo(left.x, left.y);
@@ -1341,7 +1325,6 @@
             ctx.closePath();
             ctx.fill();
           }
-
           let arrowDir = { x: p2_dim.x - p1_dim.x, y: p2_dim.y - p1_dim.y };
           let arrowLen = Math.sqrt(arrowDir.x * arrowDir.x + arrowDir.y * arrowDir.y);
           if (arrowLen > 1e-9) {
@@ -1351,29 +1334,24 @@
             drawArrow(p2_dim, { x: -arrowDir.x, y: -arrowDir.y });
           }
 
-          // Dimension text
+          // Determine dimension text: if text is empty or "<>", use the scaled baseline length.
           let dimText = this.text.trim();
           if (!dimText || dimText === "<>") {
-            dimText = baselineLength.toFixed(2);
+            dimText = (baselineLength * dimScale).toFixed(2);
           }
-          let dimLineMid = { 
-            x: (p1_dim.x + p2_dim.x) / 2, 
-            y: (p1_dim.y + p2_dim.y) / 2 
-          };
+          let dimLineMid = { x: (p1_dim.x + p2_dim.x) / 2, y: (p1_dim.y + p2_dim.y) / 2 };
 
-          // Adjust text angle to your flipped Y system:
-          let angle = Math.atan2(u.y, u.x);
-          // Possibly invert it:
-          angle = -angle;
-          // Or if you want the text upright always:
-          if (angle > Math.PI / 2) angle -= Math.PI;
-          if (angle < -Math.PI / 2) angle += Math.PI;
+          // Compute the text rotation based on the offset dimension line
+          let textAngle = Math.atan2(p2_dim.y - p1_dim.y, p2_dim.x - p1_dim.x);
+          // Ensure text remains upright
+          if (textAngle > Math.PI / 2) textAngle -= Math.PI;
+          if (textAngle < -Math.PI / 2) textAngle += Math.PI;
 
           let defaultTextHeight = (dxfDoc.header && dxfDoc.header["$DIMTXT"])
             ? parseFloat(dxfDoc.header["$DIMTXT"]) : 12;
           ctx.save();
           ctx.translate(dimLineMid.x, dimLineMid.y);
-          ctx.rotate(angle);
+          ctx.rotate(textAngle);
           ctx.font = defaultTextHeight + "px sans-serif";
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
