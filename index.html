@@ -1694,14 +1694,27 @@
           if (!block) return;
           this.applyStyle(ctx, viewport, dxfDoc);
           ctx.save();
-          let { x: insX, y: insY } = this.insertionPoint;
+
+          // Adjust insertion point by header INSBASE if available.
+          let insBase = { x: 0, y: 0 };
+          if (dxfDoc.header && dxfDoc.header["$INSBASE"]) {
+            insBase = dxfDoc.header["$INSBASE"];
+          }
+          // Adjust the insertion point
+          let adjustedInsertionPoint = {
+            x: this.insertionPoint.x - insBase.x,
+            y: this.insertionPoint.y - insBase.y
+          };
+
           let { x: scaleX, y: scaleY } = this.scale;
           let angle = DXFUtils.degToRad(this.rotation);
           let bp = block.basePoint || { x: 0, y: 0 };
-          ctx.translate(insX, insY);
+
+          ctx.translate(adjustedInsertionPoint.x, adjustedInsertionPoint.y);
           ctx.rotate(angle);
           ctx.scale(scaleX, scaleY);
           ctx.translate(-bp.x, -bp.y);
+
           block.entities.forEach(e => {
             if (renderSettings.entity[e.type] !== false) {
               e.draw(ctx, viewport, dxfDoc);
@@ -3081,38 +3094,82 @@
             let value = (lines[i + 1] || "").trim();
             if (code === "0" && value === "SECTION") {
               i += 2;
-              if (lines[i]?.trim() === "2") {
-                let sectionName = (lines[i + 1] || "").trim();
-                i += 2;
-                switch (sectionName) {
-                  case "TABLES":
-                    let tablesResult = this.parseTables(lines, i);
-                    dxf.layers = tablesResult.layers;
-                    dxf.linetypes = tablesResult.linetypes;
-                    i = tablesResult.nextIndex;
-                    break;
-                  case "BLOCKS":
-                    i = this.parseBlocks(lines, i, dxf);
-                    break;
-                  case "ENTITIES":
-                    i = this.parseEntities(lines, i, dxf);
-                    break;
-                  default:
-                    while (i < lines.length) {
-                      if (lines[i].trim() === "0" && (lines[i + 1] || "").trim() === "ENDSEC") {
-                        i += 2;
-                        break;
-                      }
+              let sectionName = (lines[i + 1] || "").trim();
+              i += 2;
+              switch (sectionName) {
+                case "HEADER":
+                  let headerResult = this.parseHeader(lines, i);
+                  dxf.header = headerResult.header;
+                  i = headerResult.nextIndex;
+                  break;
+                case "TABLES":
+                  // existing handling…
+                  let tablesResult = this.parseTables(lines, i);
+                  dxf.layers = tablesResult.layers;
+                  dxf.linetypes = tablesResult.linetypes;
+                  i = tablesResult.nextIndex;
+                  break;
+                case "BLOCKS":
+                  i = this.parseBlocks(lines, i, dxf);
+                  break;
+                case "ENTITIES":
+                  i = this.parseEntities(lines, i, dxf);
+                  break;
+                default:
+                  // Skip any other sections.
+                  while (i < lines.length) {
+                    if (lines[i].trim() === "0" && (lines[i + 1] || "").trim() === "ENDSEC") {
                       i += 2;
+                      break;
                     }
-                    break;
-                }
+                    i += 2;
+                  }
+                  break;
               }
             } else {
               i += 2;
             }
           }
           return dxf;
+        }
+        parseHeader(lines, i) {
+          let header = {};
+          while (i < lines.length) {
+            let code = lines[i].trim();
+            let value = (lines[i + 1] || "").trim();
+            // When we reach the end of the header section
+            if (code === "0" && value === "ENDSEC") {
+              i += 2;
+              break;
+            }
+            if (code === "9") {
+              // Group code 9 starts a header variable name.
+              let varName = value;
+              i += 2;
+              // Next group code(s) give the variable’s value.
+              // For example, $INSBASE might be defined with codes 10 and 20.
+              // Here you can check the following code(s) and store them accordingly.
+              let varValue = {};
+              while (i < lines.length && lines[i].trim() !== "0") {
+                let subCode = lines[i].trim();
+                let subValue = (lines[i + 1] || "").trim();
+                if (subCode === "10" || subCode === "20" || subCode === "30") {
+                  // For points, store as a coordinate object.
+                  if (!varValue.x && subCode === "10") { varValue.x = parseFloat(subValue); }
+                  else if (!varValue.y && subCode === "20") { varValue.y = parseFloat(subValue); }
+                  else if (!varValue.z && subCode === "30") { varValue.z = parseFloat(subValue); }
+                } else {
+                  // For scalar values, simply store the parsed value.
+                  varValue[subCode] = subValue;
+                }
+                i += 2;
+              }
+              header[varName] = varValue;
+            } else {
+              i += 2;
+            }
+          }
+          return { header, nextIndex: i };
         }
         parseGenericTableEntry(lines, i) {
           let entry = {};
@@ -3425,77 +3482,28 @@
           this.viewOffsetY = this.baseOffsetY;
         }
         setInitialView(dxfDoc) {
-          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-          function considerPoint(x, y) {
-            if (isNaN(x) || isNaN(y)) return;
-            minX = Math.min(minX, x);
-            minY = Math.min(minY, y);
-            maxX = Math.max(maxX, x);
-            maxY = Math.max(maxY, y);
+          let minX, minY, maxX, maxY;
+          // Use header extents if available
+          if (dxfDoc.header && dxfDoc.header["$EXTMIN"] && dxfDoc.header["$EXTMAX"]) {
+            minX = dxfDoc.header["$EXTMIN"].x;
+            minY = dxfDoc.header["$EXTMIN"].y;
+            maxX = dxfDoc.header["$EXTMAX"].x;
+            maxY = dxfDoc.header["$EXTMAX"].y;
+          } else {
+            // Fallback: compute bounding box from entities.
+            minX = Infinity; minY = Infinity;
+            maxX = -Infinity; maxY = -Infinity;
+            dxfDoc.entities.forEach(entity => {
+              let bbox = getEntityBBox(entity);
+              if (bbox) {
+                minX = Math.min(minX, bbox.minX);
+                minY = Math.min(minY, bbox.minY);
+                maxX = Math.max(maxX, bbox.maxX);
+                maxY = Math.max(maxY, bbox.maxY);
+              }
+            });
           }
-          function processEntity(entity) {
-            switch (entity.type) {
-              case "LINE":
-                considerPoint(entity.x1, entity.y1);
-                considerPoint(entity.x2, entity.y2);
-                break;
-              case "CIRCLE":
-                considerPoint(entity.cx - entity.r, entity.cy - entity.r);
-                considerPoint(entity.cx + entity.r, entity.cy + entity.r);
-                break;
-              case "ARC":
-                considerPoint(entity.cx - entity.r, entity.cy - entity.r);
-                considerPoint(entity.cx + entity.r, entity.cy + entity.r);
-                break;
-              case "POLYLINE":
-              case "LWPOLYLINE":
-                entity.vertices.forEach(v => considerPoint(v.x, v.y));
-                break;
-              case "TEXT":
-              case "MTEXT":
-              case "ATTRIB":
-              case "DIMENSION":
-                if (entity.position) {
-                  considerPoint(entity.position.x, entity.position.y);
-                }
-                if (entity.p1) considerPoint(entity.p1.x, entity.p1.y);
-                if (entity.p2) considerPoint(entity.p2.x, entity.p2.y);
-                break;
-              case "HATCH":
-                entity.boundaryLoops.forEach(loop => {
-                  loop.forEach(pt => considerPoint(pt.x, pt.y));
-                });
-                break;
-              case "INSERT":
-                considerPoint(entity.insertionPoint.x, entity.insertionPoint.y);
-                break;
-              case "SPLINE":
-                entity.fitPoints.forEach(pt => considerPoint(pt.x, pt.y));
-                entity.controlPoints.forEach(pt => considerPoint(pt.x, pt.y));
-                break;
-              case "ELLIPSE":
-                {
-                  let rx = Math.sqrt(entity.mx * entity.mx + entity.my * entity.my);
-                  let ry = rx * (entity.ratio || 1);
-                  considerPoint(entity.cx - rx, entity.cy - ry);
-                  considerPoint(entity.cx + rx, entity.cy + ry);
-                }
-                break;
-              case "3DFACE":
-              case "SOLID":
-                entity.points.forEach(pt => considerPoint(pt.x, pt.y));
-                break;
-              default:
-                break;
-            }
-          }
-          dxfDoc.entities.forEach(e => processEntity(e));
-          for (let name in dxfDoc.blocks) {
-            let block = dxfDoc.blocks[name];
-            considerPoint(block.basePoint.x, block.basePoint.y);
-            block.entities.forEach(be => processEntity(be));
-          }
-          if (minX === Infinity) {
+          if (minX === Infinity) { // no valid extents; use defaults
             minX = -100; minY = -100; maxX = 100; maxY = 100;
           }
           let dw = maxX - minX, dh = maxY - minY;
