@@ -1675,7 +1675,7 @@
                 insert.rotation = parseFloat(value);
                 break;
               case "67":
-                insert.raw["67"] = value;
+                insert.spaceFlag = parseInt(value, 10);
                 break;
               default:
                 insert.raw[code] = value;
@@ -3569,14 +3569,22 @@
           this.draw();
         }
         shouldRender(entity) {
+          // Check for object visibility: if group code 60 is set to 1, skip rendering.
+          if (entity.raw["60"] !== undefined && parseInt(entity.raw["60"], 10) === 1) {
+            return false;
+          }
+          // Existing check for VIEWPORT and space flag.
           if (entity.type === "VIEWPORT") {
             return this.activeLayout === "paper";
           }
-          const flag = entity.raw["67"];
+          // Use dedicated property for space flag if available.
+          const flag = (entity.spaceFlag !== undefined)
+            ? entity.spaceFlag
+            : (entity.raw["67"] ? parseInt(entity.raw["67"], 10) : 0);
           if (this.activeLayout === "model") {
-            return (!flag || parseInt(flag, 10) === 0);
+            return (flag === 0 || flag === undefined);
           } else if (this.activeLayout === "paper") {
-            return (flag !== undefined && parseInt(flag, 10) === 1);
+            return (flag === 1);
           }
           return true;
         }
