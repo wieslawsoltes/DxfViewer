@@ -655,8 +655,19 @@
           }
           if (!linetypeName) return [];
           linetypeName = linetypeName.toUpperCase();
+
+          // Use entity-specific linetype scale if provided, otherwise fallback to header $LTSCALE.
           let patternScale = 1.0;
-          if (entity.raw["48"]) patternScale = parseFloat(entity.raw["48"]) || 1.0;
+          if (entity.raw["48"]) {
+            patternScale = parseFloat(entity.raw["48"]) || 1.0;
+          } else if (dxfDoc.header && dxfDoc.header["$LTSCALE"]) {
+            patternScale = parseFloat(dxfDoc.header["$LTSCALE"]) || 1.0;
+          }
+          // For paper space, optionally incorporate $CELTSCALE.
+          if (entity.raw["67"] && parseInt(entity.raw["67"], 10) === 1 && dxfDoc.header && dxfDoc.header["$CELTSCALE"]) {
+            patternScale *= parseFloat(dxfDoc.header["$CELTSCALE"]);
+          }
+
           if (dxfDoc.linetypes && dxfDoc.linetypes[linetypeName]) {
             let ltype = dxfDoc.linetypes[linetypeName];
             if (ltype.pattern && ltype.pattern.length > 0) {
@@ -1255,8 +1266,14 @@
           if (!renderSettings.entity["DIMENSION"]) return;
           this.applyStyle(ctx, viewport, dxfDoc);
 
+          // Retrieve dimension scale from header ($DIMSCALE) if available.
+          let dimScale = (dxfDoc.header && dxfDoc.header["$DIMSCALE"])
+            ? parseFloat(dxfDoc.header["$DIMSCALE"]) : 1;
+
           let p1 = this.p1, p2 = this.p2;
-          let dx = p2.x - p1.x, dy = p2.y - p1.y;
+          // Scale baseline length by dimension scale factor.
+          let dx = (p2.x - p1.x) * dimScale;
+          let dy = (p2.y - p1.y) * dimScale;
           let baselineLength = Math.sqrt(dx * dx + dy * dy);
           if (baselineLength < 1e-9) {
             ctx.globalAlpha = 1;
@@ -1352,10 +1369,12 @@
           if (angle > Math.PI / 2) angle -= Math.PI;
           if (angle < -Math.PI / 2) angle += Math.PI;
 
+          let defaultTextHeight = (dxfDoc.header && dxfDoc.header["$DIMTXT"])
+            ? parseFloat(dxfDoc.header["$DIMTXT"]) : 12;
           ctx.save();
           ctx.translate(dimLineMid.x, dimLineMid.y);
           ctx.rotate(angle);
-          ctx.font = "12px sans-serif";
+          ctx.font = defaultTextHeight + "px sans-serif";
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
           ctx.fillText(dimText, 0, 0);
@@ -1695,12 +1714,11 @@
           this.applyStyle(ctx, viewport, dxfDoc);
           ctx.save();
 
-          // Adjust insertion point by header INSBASE if available.
+          // Adjust insertion point using $INSBASE if available.
           let insBase = { x: 0, y: 0 };
           if (dxfDoc.header && dxfDoc.header["$INSBASE"]) {
             insBase = dxfDoc.header["$INSBASE"];
           }
-          // Adjust the insertion point
           let adjustedInsertionPoint = {
             x: this.insertionPoint.x - insBase.x,
             y: this.insertionPoint.y - insBase.y
@@ -1709,7 +1727,6 @@
           let { x: scaleX, y: scaleY } = this.scale;
           let angle = DXFUtils.degToRad(this.rotation);
           let bp = block.basePoint || { x: 0, y: 0 };
-
           ctx.translate(adjustedInsertionPoint.x, adjustedInsertionPoint.y);
           ctx.rotate(angle);
           ctx.scale(scaleX, scaleY);
@@ -3483,14 +3500,22 @@
         }
         setInitialView(dxfDoc) {
           let minX, minY, maxX, maxY;
-          // Use header extents if available
+          // Prefer header-defined extents ($EXTMIN and $EXTMAX)
           if (dxfDoc.header && dxfDoc.header["$EXTMIN"] && dxfDoc.header["$EXTMAX"]) {
             minX = dxfDoc.header["$EXTMIN"].x;
             minY = dxfDoc.header["$EXTMIN"].y;
             maxX = dxfDoc.header["$EXTMAX"].x;
             maxY = dxfDoc.header["$EXTMAX"].y;
-          } else {
-            // Fallback: compute bounding box from entities.
+          }
+          // Fall back to limits ($LIMMIN and $LIMMAX)
+          else if (dxfDoc.header && dxfDoc.header["$LIMMIN"] && dxfDoc.header["$LIMMAX"]) {
+            minX = dxfDoc.header["$LIMMIN"].x;
+            minY = dxfDoc.header["$LIMMIN"].y;
+            maxX = dxfDoc.header["$LIMMAX"].x;
+            maxY = dxfDoc.header["$LIMMAX"].y;
+          }
+          // Otherwise, compute the bounding box from the entities.
+          else {
             minX = Infinity; minY = Infinity;
             maxX = -Infinity; maxY = -Infinity;
             dxfDoc.entities.forEach(entity => {
@@ -3503,7 +3528,7 @@
               }
             });
           }
-          if (minX === Infinity) { // no valid extents; use defaults
+          if (minX === Infinity) { // no valid extents found
             minX = -100; minY = -100; maxX = 100; maxY = 100;
           }
           let dw = maxX - minX, dh = maxY - minY;
