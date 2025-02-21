@@ -3939,6 +3939,28 @@
         renderSettings.renderTransparency = !e.target.checked;
         viewer.draw();
       });
+
+      // New: Drag and Drop file support for DXF files
+      canvas.addEventListener("dragover", function(e) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      });
+      canvas.addEventListener("drop", function(e) {
+        e.preventDefault();
+        const file = e.dataTransfer.files[0];
+        if (!file) return;
+        if (file.name.toLowerCase().endsWith(".dxf")) {
+          const reader = new FileReader();
+          reader.onload = function(event) {
+            const text = event.target.result;
+            viewer.loadDXF(text);
+          };
+          reader.readAsText(file);
+        } else {
+          alert("Please drop a valid DXF file.");
+        }
+      });
+
       viewer.draw();
       
        // New: Add canvas mousemove listener to show tooltip for entity under pointer
