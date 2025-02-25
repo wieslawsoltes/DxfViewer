@@ -656,14 +656,14 @@
           if (!linetypeName) return [];
           linetypeName = linetypeName.toUpperCase();
 
-          // Use entity-specific linetype scale if provided, otherwise fallback to header $LTSCALE.
+          // Use an entity-specific linetype scale if provided; otherwise, check header $LTSCALE.
           let patternScale = 1.0;
           if (entity.raw["48"]) {
             patternScale = parseFloat(entity.raw["48"]) || 1.0;
           } else if (dxfDoc.header && dxfDoc.header["$LTSCALE"]) {
             patternScale = parseFloat(dxfDoc.header["$LTSCALE"]) || 1.0;
           }
-          // For paper space, optionally incorporate $CELTSCALE.
+          // For paper space, optionally incorporate header $CELTSCALE.
           if (entity.raw["67"] && parseInt(entity.raw["67"], 10) === 1 && dxfDoc.header && dxfDoc.header["$CELTSCALE"]) {
             patternScale *= parseFloat(dxfDoc.header["$CELTSCALE"]);
           }
@@ -1266,13 +1266,11 @@
           if (!renderSettings.entity["DIMENSION"]) return;
           this.applyStyle(ctx, viewport, dxfDoc);
 
-          // Use $DIMSCALE only for text measurement; do not alter drawing points.
+          // Use header $DIMSCALE (if defined) for scaling the dimension text.
           let dimScale = (dxfDoc.header && dxfDoc.header["$DIMSCALE"])
             ? parseFloat(dxfDoc.header["$DIMSCALE"]) : 1;
-
           let p1 = this.p1, p2 = this.p2;
-          let dx = p2.x - p1.x;
-          let dy = p2.y - p1.y;
+          let dx = p2.x - p1.x, dy = p2.y - p1.y;
           let baselineLength = Math.sqrt(dx * dx + dy * dy);
           if (baselineLength < 1e-9) {
             ctx.globalAlpha = 1;
@@ -1410,7 +1408,8 @@
           let defaultSize = this.height;
           let rotation = this.rotation ? DXFUtils.degToRad(this.rotation) : 0;
           let rawText = this.rawText || "";
-          let defaultFont = this.font || "sans-serif";
+          // If no explicit font is provided, check for a header variable "$TEXTSTYLE"
+          let defaultFont = this.font || (dxfDoc.header && dxfDoc.header["$TEXTSTYLE"] ? dxfDoc.header["$TEXTSTYLE"] : "sans-serif");
           let defaultColor = this.getColor(dxfDoc);
           this.applyStyle(ctx, viewport, dxfDoc);
           let parsedSegments = parseMTEXTContent(rawText, defaultSize, defaultFont, defaultColor);
@@ -1692,7 +1691,7 @@
           this.applyStyle(ctx, viewport, dxfDoc);
           ctx.save();
 
-          // Adjust insertion point using $INSBASE if available.
+          // Adjust insertion point using header $INSBASE if defined.
           let insBase = { x: 0, y: 0 };
           if (dxfDoc.header && dxfDoc.header["$INSBASE"]) {
             insBase = dxfDoc.header["$INSBASE"];
@@ -1767,7 +1766,8 @@
           let rotation = this.rotation ? DXFUtils.degToRad(this.rotation) : 0;
           let text = this.text;
           let defaultSize = this.height;
-          let defaultFont = this.font || "sans-serif";
+          // If no explicit font is provided, use header $TEXTSTYLE if defined.
+          let defaultFont = this.font || (dxfDoc.header && dxfDoc.header["$TEXTSTYLE"] ? dxfDoc.header["$TEXTSTYLE"] : "sans-serif");
           let defaultColor = this.getColor(dxfDoc);
           let rawText = this.text || "";
           let parsedSegments = parseMTEXTContent(rawText, defaultSize, defaultFont, defaultColor);
@@ -3132,34 +3132,47 @@
           while (i < lines.length) {
             let code = lines[i].trim();
             let value = (lines[i + 1] || "").trim();
-            // When we reach the end of the header section
+            // End of the header section
             if (code === "0" && value === "ENDSEC") {
               i += 2;
               break;
             }
             if (code === "9") {
-              // Group code 9 starts a header variable name.
+              // Group code 9 begins a header variable name
               let varName = value;
               i += 2;
-              // Next group code(s) give the variable’s value.
-              // For example, $INSBASE might be defined with codes 10 and 20.
-              // Here you can check the following code(s) and store them accordingly.
-              let varValue = {};
-              while (i < lines.length && lines[i].trim() !== "0") {
+              let data = {};
+              // Read subsequent codes until we hit a new header variable ("9") or the section end
+              while (
+                i < lines.length &&
+                lines[i].trim() !== "9" &&
+                !(lines[i].trim() === "0" && (lines[i + 1] || "").trim() === "ENDSEC")
+              ) {
                 let subCode = lines[i].trim();
                 let subValue = (lines[i + 1] || "").trim();
-                if (subCode === "10" || subCode === "20" || subCode === "30") {
-                  // For points, store as a coordinate object.
-                  if (!varValue.x && subCode === "10") { varValue.x = parseFloat(subValue); }
-                  else if (!varValue.y && subCode === "20") { varValue.y = parseFloat(subValue); }
-                  else if (!varValue.z && subCode === "30") { varValue.z = parseFloat(subValue); }
-                } else {
-                  // For scalar values, simply store the parsed value.
-                  varValue[subCode] = subValue;
+                // Try converting to number if the string represents a numeric value exactly.
+                let numVal = parseFloat(subValue);
+                if (!isNaN(numVal) && numVal.toString() === subValue) {
+                  subValue = numVal;
                 }
+                data[subCode] = subValue;
                 i += 2;
               }
-              header[varName] = varValue;
+              // If data contains coordinate group codes, combine into a point object.
+              if (data["10"] !== undefined && data["20"] !== undefined) {
+                header[varName] = {
+                  x: data["10"],
+                  y: data["20"],
+                  z: data["30"] !== undefined ? data["30"] : 0
+                };
+              } else {
+                // If only one property exists, use that value directly; otherwise keep the object.
+                if (Object.keys(data).length === 1) {
+                  header[varName] = data[Object.keys(data)[0]];
+                } else {
+                  header[varName] = data;
+                }
+              }
             } else {
               i += 2;
             }
@@ -3478,22 +3491,17 @@
         }
         setInitialView(dxfDoc) {
           let minX, minY, maxX, maxY;
-          // Prefer header-defined extents ($EXTMIN and $EXTMAX)
           if (dxfDoc.header && dxfDoc.header["$EXTMIN"] && dxfDoc.header["$EXTMAX"]) {
             minX = dxfDoc.header["$EXTMIN"].x;
             minY = dxfDoc.header["$EXTMIN"].y;
             maxX = dxfDoc.header["$EXTMAX"].x;
             maxY = dxfDoc.header["$EXTMAX"].y;
-          }
-          // Fall back to limits ($LIMMIN and $LIMMAX)
-          else if (dxfDoc.header && dxfDoc.header["$LIMMIN"] && dxfDoc.header["$LIMMAX"]) {
+          } else if (dxfDoc.header && dxfDoc.header["$LIMMIN"] && dxfDoc.header["$LIMMAX"]) {
             minX = dxfDoc.header["$LIMMIN"].x;
             minY = dxfDoc.header["$LIMMIN"].y;
             maxX = dxfDoc.header["$LIMMAX"].x;
             maxY = dxfDoc.header["$LIMMAX"].y;
-          }
-          // Otherwise, compute the bounding box from the entities.
-          else {
+          } else {
             minX = Infinity; minY = Infinity;
             maxX = -Infinity; maxY = -Infinity;
             dxfDoc.entities.forEach(entity => {
@@ -3506,9 +3514,7 @@
               }
             });
           }
-          if (minX === Infinity) { // no valid extents found
-            minX = -100; minY = -100; maxX = 100; maxY = 100;
-          }
+          if (minX === Infinity) { minX = -100; minY = -100; maxX = 100; maxY = 100; }
           let dw = maxX - minX, dh = maxY - minY;
           let sx = this.canvas.width / dw, sy = this.canvas.height / dh;
           this.baseScale = 0.9 * Math.min(sx, sy);
@@ -3603,15 +3609,19 @@
           let ctx = this.ctx;
           ctx.save();
           ctx.setTransform(1, 0, 0, 1, 0, 0);
-          ctx.fillStyle = "#000";
+          // If a header variable "$BACKGROUNDCOLOR" is defined, use it.
+          let bgColor = (this.dxfDoc.header && this.dxfDoc.header["$BACKGROUNDCOLOR"]) || "#000";
+          ctx.fillStyle = bgColor;
           ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
           ctx.restore();
+
           ctx.setTransform(
             this.viewport.viewScale, 0,
             0, -this.viewport.viewScale,
             this.viewport.viewOffsetX,
             this.viewport.viewOffsetY
           );
+
           if (this.gridEnabled) {
             this.drawGrid();
           }
@@ -3765,7 +3775,7 @@
         }
       }
 
-            // ─────────────────────────────────────────────────────────────
+      // ─────────────────────────────────────────────────────────────
       // Helper: Compute a simple bounding box for an entity
       // ─────────────────────────────────────────────────────────────
       function getEntityBBox(entity) {
